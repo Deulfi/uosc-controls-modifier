@@ -90,10 +90,10 @@ local options = {
   audio_types = 'aac,ac3,aiff,ape,au,cue,dsf,dts,flac,m4a,mid,midi,mka,mp3,mp4a,oga,ogg,opus,spx,tak,tta,wav,weba,wma,wv',
   image_types = 'apng,avif,bmp,gif,j2k,jp2,jfif,jpeg,jpg,jxl,mj2,png,svg,tga,tif,tiff,webp,jpeg_pipe',
 
-  --buttons = nil,
+  buttons = nil,
   
 
-  buttons = 
+  buttons_test = 
   {
       example = -- name of the button, put this name in uosc.conf button:name
       {
@@ -184,7 +184,6 @@ local options = {
         {
           badge    = "?(p)",
           tooltip  = "[[video-params/w]]x[[video-params/h]]",
-          --badge_property = "video-params/h,+p,video-params/w,+x,video-params/h",
         },
       },
   },
