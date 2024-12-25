@@ -35,10 +35,10 @@ Example usage: `ctrl+1 script-message-to uosc_controls_modifier set state_1`
 `set` statename  
 All buttons with the provided state name will be shown. Default state will be shown for all other buttons.
 
-`set-default` statename
+`set-default` statename  
 A different state will be marked as default state.
 
-`revert-default`
+`revert-default`  
 Reverts to the original default state.
 
 ## Button:
