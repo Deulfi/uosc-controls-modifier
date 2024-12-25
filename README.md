@@ -27,6 +27,7 @@ Default settings and examples are listed in **uosc-controls-modifier.conf**, cop
 ## Note
   - While some descriptions are similar to native uosc descriptions, the buttons that are created with this script are not as powerful as native uosc buttons and I suggest you use them wherever possible. 
   - Another thing of note is that the visibility of the buttons can be controlled via the uosc.conf file. This means you can still hide buttons that you don't want to see in certain conditions.
+  - This script is for more advanced users that can figure out what commands and properties to use themselves.
 
 ## Script messages
 Some script messages are provided for use in `input.conf`.  
@@ -58,7 +59,7 @@ Reverts to the original default state.
 
 
 ##  Examples:
-   - Change controls when a modifier key is held. They will be automatically registered with inputevent.lua
+   - Change buttons when a modifier key is held. They will be automatically registered with inputevent.lua
    ``` 
    modifier_keys=state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID
    ```
