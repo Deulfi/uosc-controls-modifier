@@ -1,16 +1,16 @@
-   # uosc-controls-modifier
+# uosc-controls-modifier
    MPV Dynamic Button State Manager for uosc Interface
 
    This script enhances the MPV player uosc interface by enabling dynamic button state management. 
-   It acts as a "freamework" to have multiple buttons apear to occupie the same space on the uosc interface.
+   It acts as a "framework" to have multiple buttons appear to occupy the same space on the uosc interface.
    It allows buttons to have multiple states triggered by modifier keys (like mouse buttons) or commands, 
    providing a more interactive and context-sensitive control interface.
    
-   changes happen on certain events like:
-   - showing a different button while holding a modifier key (like holding the right mouse button) [inputevent](https://github.com/natural-harmonia-gropius/input-event) is needed for this
-   - defining keys in input.conf to trigger a state change
-   - registered property observers to update the state of the button
-   - using mpvs profiles
+   Changes happen on certain events like:
+   - Showing a different button while holding a modifier key (like holding the right mouse button) [inputevent](https://github.com/natural-harmonia-gropius/input-event) is needed for this
+   - Defining keys in input.conf to trigger a state change
+   - Registered property observers to update the state of the button
+   - Using mpv's profiles
   
 ## Installation
 Place **uosc-controls-modifier.lua** in your mpv `scripts` folder.
@@ -22,7 +22,7 @@ Default settings and examples are listed in **uosc-controls-modifier.conf**, cop
   - (optional) [inputevent](https://github.com/natural-harmonia-gropius/input-event)
 
 ## Note
-  - while some descriptions are similar to native uosc descriptions, the buttons that are created with this script are not as powerful as native uosc buttons and I sugesst you use them wherever possible. 
+  - While some descriptions are similar to native uosc descriptions, the buttons that are created with this script are not as powerful as native uosc buttons and I suggest you use them wherever possible. 
   - Another thing of note is that the visibility of the buttons can be controlled via the uosc.conf file. This means you can still hide buttons that you don't want to see in certain conditions.
 
 ## Script messages
@@ -78,5 +78,3 @@ Reverts to the original default state.
    ```
    controls=button:alt_control_items,button:alt_control_loop,gap,fullscreen,gap,button:alt_format,gap,<video>button:alt_resolution
    ```
-
-
