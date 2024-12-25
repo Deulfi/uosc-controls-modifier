@@ -37,10 +37,10 @@ Example usage: `ctrl+1 script-message-to uosc_controls_modifier set state_1`
 All buttons with the provided state name will be shown. Default state will be shown for all other buttons.
 
 `set-default` statename  
-A different state will be marked as default state.
+A different state will be marked as default state. (used in profiles)
 
 `revert-default`  
-Reverts to the original default state.
+Reverts to the original default state. (used in profiles)
 
 ## Button:
 - Each button can have multiple states (state_1, state_2, state_3, etc.) defining:
