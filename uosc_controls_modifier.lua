@@ -18,7 +18,6 @@
        * active: Boolean for active state
        * tooltip: Hover text
        * command: MPV command to execute
-       * property: MPV property to observe for active state
 
    How it Works:
    1. Define buttons and their states in the options table.
@@ -46,8 +45,8 @@
    - Show different button options in fullscreen vs. windowed mode.
 
    Script Messages:
-   - set-state_X: Switch to state X
-   - set-default: Change default state (inputevent.lua)
+   - set X: Switch to state X
+   - set-default X: Change default state (inputevent.lua)
    - revert-default: Revert to original default state (inputevent.lua)
 
    For more information and updates, visit the GitHub repository.
@@ -386,6 +385,10 @@ function Button:update_state(state_name)
 
         return has_properties and result or nil, has_properties
     end
+
+    if state_name:sub(1, 1) == "#" then
+        state_name = state_name:sub(2)
+    end
     
     local state = self.states[state_name]
     if state then
@@ -401,7 +404,7 @@ function Button:update_state(state_name)
             command = state.command,
         }))
     else
-        mp.msg.error("Unknown state:",state)
+        mp.msg.error("Unknown state:",state, "name:", state_name)
     end
 end
 --MARK: ButtonManager
@@ -684,7 +687,7 @@ end
 
 --MARK: Main
 res_table = translate_res_translation()
---build_buttons_table()
+build_buttons_table()
 
 local key_states = parse_modifier_keys()
 
