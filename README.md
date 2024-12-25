@@ -1,6 +1,9 @@
 # uosc-controls-modifier
    MPV Dynamic Button State Manager for uosc Interface
 
+   ![uosc_control_modifier](https://github.com/user-attachments/assets/66d40b9c-b7c6-4147-b69f-2518597c33a8)
+
+
    This script enhances the MPV player uosc interface by enabling dynamic button state management. 
    It acts as a "framework" to have multiple buttons appear to occupy the same space on the uosc interface.
    It allows buttons to have multiple states triggered by modifier keys (like mouse buttons) or commands, 
