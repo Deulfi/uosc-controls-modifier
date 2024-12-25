@@ -22,7 +22,7 @@ Default settings and examples are listed in **uosc-controls-modifier.conf**, cop
 ## Requirements:
   - [MPV player](https://mpv.io/)
   - [uosc user interface](https://github.com/tomasklaen/uosc)
-  - (optional) [inputevent](https://github.com/natural-harmonia-gropius/input-event)
+  - (optional) [inputevent](https://github.com/natural-harmonia-gropius/input-event) (but recommended)
 
 ## Note
   - While some descriptions are similar to native uosc descriptions, the buttons that are created with this script are not as powerful as native uosc buttons and I suggest you use them wherever possible. 
