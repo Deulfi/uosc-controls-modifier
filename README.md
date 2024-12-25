@@ -7,7 +7,7 @@
    providing a more interactive and context-sensitive control interface.
    
    changes happen on certain events like:
-   - showing a different button while holding a modifier key (like holding the right mouse button)[inputevent](https://github.com/natural-harmonia-gropius/input-event) is needed for this
+   - showing a different button while holding a modifier key (like holding the right mouse button) [inputevent](https://github.com/natural-harmonia-gropius/input-event) is needed for this
    - defining keys in input.conf to trigger a state change
    - registered property observers to update the state of the button
    - using mpvs profiles
@@ -55,7 +55,7 @@ Reverts to the original default state.
 
 
 ##  Examples:
-   - Change playlist controls when a modifier key is held. They will be automatically registered with inputevent.lua
+   - Change controls when a modifier key is held. They will be automatically registered with inputevent.lua
    ``` 
    modifier_keys=state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID
    ```
@@ -76,7 +76,7 @@ Reverts to the original default state.
    ```
    - uosc.conf controls with example buttons
    ```
-   controls=button:alt_control_items,button:alt_control_loop,gap,fullscreen,gap,button:alt_format,gap,<video>button:alt_resolution,
+   controls=button:alt_control_items,button:alt_control_loop,gap,fullscreen,gap,button:alt_format,gap,<video>button:alt_resolution
    ```
 
 
