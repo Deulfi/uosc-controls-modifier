@@ -373,11 +373,11 @@ function ButtonManager:init(key_states)
     self:lookup_unique_states()
     self:initialize_buttons()
 
-    --local function temp()
-    --    self:show_default(nil)
-    --    mp.unobserve_property(temp)
-    --end
-    --mp.observe_property("idle", "string", temp)
+    local function temp()
+        self:show_default(nil)
+        mp.unobserve_property(temp)
+    end
+    mp.observe_property("idle", "string", temp)
 end
 
 function ButtonManager:lookup_unique_states()
@@ -520,12 +520,12 @@ function ButtonManager:register_default_handlers()
             end
         end
         self.key_states['default'] = new_default_state
-        self:show_default()
+        self:show_default(nil)
     end)
 
     mp.register_script_message('revert-default', function()
         self.key_states = shallow_copy(saved_key_states)
-        self:show_default()
+        self:show_default(nil)
     end)
 end
 
