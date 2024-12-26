@@ -5,15 +5,16 @@
 
 
    This script enhances the MPV player uosc interface by enabling dynamic button state management. 
-   It acts as a "framework" to have multiple buttons appear to occupy the same space on the uosc interface.
-   It allows buttons to have multiple states triggered by modifier keys (like mouse buttons) or commands, 
-   providing a more interactive and context-sensitive control interface.
+   It acts as a "framework" for defining multiple states for buttons and have them switch between state on certain events.
+   It allows buttons to have multiple states triggered by modifier keys (like holding right mouse button pressed) or commands, 
+   providing a more interactive and context-sensitive control interface. It is useful if you want certain seldomly used buttons
+   still easily accessible.
    
    Changes happen on certain events like:
    - Showing a different button while holding a modifier key (like holding the right mouse button) [inputevent](https://github.com/natural-harmonia-gropius/input-event) is needed for this
    - Defining keys in input.conf to trigger a state change
    - Registered property observers to update the state of the button
-   - Using mpv's profiles
+   - Using mpv's profiles to trigger script messages
   
 ## Installation
 Place **uosc-controls-modifier.lua** in your mpv `scripts` folder.
@@ -35,6 +36,9 @@ Example usage: `ctrl+1 script-message-to uosc_controls_modifier set state_1`
 
 `set` statename  
 All buttons with the provided state name will be shown. Default state will be shown for all other buttons.
+
+`set-button-state` buttonname statename
+Sets one button to a specific state. 
 
 `set-default` statename  
 A different state will be marked as default state. (used in profiles)

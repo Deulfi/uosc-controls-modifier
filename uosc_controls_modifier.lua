@@ -199,11 +199,10 @@ Button.__index = Button
 -- Default State Template
 local DEFAULT_STATE = {
     icon = "",
-    badge = nil,
-    active = false,
+    badge = "nil",
+    active = "false",
     tooltip = "",
     command = string.format("script-message-to %s lable", script_name),
-    property = ""
 }
 
 function Button.new(name, states)
@@ -227,13 +226,15 @@ function Button:initialize_states(default_state_name)
     for state_name, state in pairs(self.states) do
         for key, fill_value in pairs(first_state or DEFAULT_STATE) do
             if state[key] == nil or state[key] == "" then
+                print("buttons", mp.utils.to_string(state), key, fill_value)
                 state[key] = fill_value
             end
         end
     end
-
     return self
 end
+
+
 --MARK: translate_res
 function Button.translate_res()
     local width = mp.get_property("video-params/w") or ""
@@ -331,6 +332,10 @@ function Button:update_state(state_name)
     end
     
     local state = self.states[state_name]
+
+    if state and state.active == "false" then state.active = false end
+    if state and state.badge == "nil" then state.badge = nil end
+
     if state then
         local tooltip, tooltip_is_property = replace_properties(state.tooltip)
         local badge,   badge_is_property   = replace_properties(state.badge)
@@ -394,8 +399,14 @@ function ButtonManager:initialize_buttons()
                 button.states[state] = button.states[self.key_states['default']]
             end
         end
+
+        mp.register_script_message('set-button-state', function(button_name,state_name)
+            self.buttons[button_name]:update_state(state_name)
+        end)
+
         self.buttons[button_name] = button
     end
+    
 end
 
 --MARK: set_button_state
@@ -426,10 +437,11 @@ end
 
 function ButtonManager:register_message_handlers()
     for state_name in pairs(self.unique_states) do
-        print("state_name", state_name)
+        mp.msg.debug("register_message_handlers", 'set ' .. state_name)
         if state_name then
-            mp.register_script_message('set-' .. state_name, function()
-                self:set_button_state(state_name, options.use_inputevent)
+            print("+")
+            mp.register_script_message('set', function(state_name)
+                self:set_button_state(state_name)
             end)
         end
     end
@@ -601,7 +613,7 @@ local function setup_input_events(key_states, manager)
     for key, state_name in pairs(key_states) do
         if state_name ~= 'default' then
             local on = {
-                press = "script-message-to " .. mp.get_script_name() .. " set-" .. state_name,
+                press = "script-message-to " .. mp.get_script_name() .. " set " .. state_name,
                 release = "script-message-to " .. mp.get_script_name() .. " revert_inputevent"
             }
             mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
@@ -625,22 +637,52 @@ local function translate_res_translation()
     return res_table
 end
 
+function setup_manager(key_states)
+    
+
+    local manager = ButtonManager.new()
+    manager:init(key_states)
+    manager:register_message_handlers()
+    manager:register_property_observers()
+    if options.use_inputevent then
+        setup_input_events(key_states, manager) 
+    end
+    manager:register_default_handlers()
+    return manager
+end
+
 --MARK: Main
+local key_states = parse_modifier_keys()
 res_table = translate_res_translation()
 build_buttons_table()
+local manager = setup_manager(key_states)
 
-local key_states = parse_modifier_keys()
 
-local manager = ButtonManager.new()
-manager:init(key_states)
-manager:register_message_handlers()
-manager:register_property_observers()
-if options.use_inputevent then
-    setup_input_events(key_states, manager) 
+
+
+
+mp.register_script_message('receive-buttons', function(buttons)
+    mp.commandv('script-message-to', script_name, 'set-buttons', buttons)
+end)
+
+mp.register_script_message('get-buttons', function(button_receiver)
+    local buttons_json = mp.utils.format_json(manager.buttons)
+    mp.commandv('script-message-to', button_receiver, 'receive-buttons', buttons_json)
+    return true
+end)
+function translate_button_format(parsed_buttons)
+    local translated = {}
+    
+    for button_name, button_data in pairs(parsed_buttons) do
+        translated[button_name] = button_data.states
+    end
+    
+    return translated
 end
-manager:register_default_handlers()
 
-
-
-
+mp.register_script_message('set-buttons', function(buttons_json)
+    local parsed_buttons = mp.utils.parse_json(buttons_json)
+    options.buttons = translate_button_format(parsed_buttons)
+    manager = setup_manager(key_states)
+end)
 
