@@ -373,11 +373,11 @@ function ButtonManager:init(key_states)
     self:lookup_unique_states()
     self:initialize_buttons()
 
-    local function temp()
-        self:show_default(nil)
-        mp.unobserve_property(temp)
-    end
-    mp.observe_property("idle", "string", temp)
+    --local function temp()
+    --    self:show_default(nil)
+    --    mp.unobserve_property(temp)
+    --end
+    --mp.observe_property("idle", "string", temp)
 end
 
 function ButtonManager:lookup_unique_states()
