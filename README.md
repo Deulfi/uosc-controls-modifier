@@ -65,7 +65,7 @@ Reverts to the original default state. (used in profiles)
 ##  Examples:
    - Change buttons when a modifier key is held. They will be automatically registered with inputevent.lua
    ``` 
-   modifier_keys=state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID
+   modifier_keys=default:state_1,MBTN_RIGHT:state_2,MBTN_MID:state_3
    ```
    - Toggle between states without modifier keys. (input.conf)
    ```
