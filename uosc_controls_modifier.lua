@@ -320,100 +320,57 @@ function Button.getMediaFormatLabel(format)
     end
     return extension
 end
+--MARK: replace_properties
+function Button:replace_properties(input, active)
+    --mp.msg.debug("input: ", input)
+    if type(input) ~= "string" then return nil end
+    if input == "" then return nil end
 
---MARK: update_state
-function Button:update_state(state_name)
-    --if state_name:sub(1, 1) == "#" then
-    --    mp.msg.warn("Malformed state, '#' found ... removing ... done")
-    --    state_name = state_name:sub(2)
-    --end
+    -- Handle resolution translation after property replacement
+    if input and input:match("%?%(p%)") then
+        local res = Button.getVideoResolutionLabel() or ""
+        input = input:gsub("%?%(p%)", res)
+    end
+    -- Handle format translation after property replacement
+    if input and input:match("%?%(f%)") then
+        local format = Button.getMediaFormatLabel() or ""
+        input = input:gsub("%?%(f%)", format)
+    end
     
-    local state = self.states[state_name]
+    local result = input
+    local props = extract_properties(input) 
+    if not props then return input end
+    
+    --mp.msg.error("props: ", mp.utils.format_json(props))
+    
+    for _, prop in ipairs(props) do
 
-    function replace_properties(input, active)
-        --mp.msg.debug("input: ", input)
-        if type(input) ~= "string" then return nil end
-        if input == "" then return nil end
+        local value = mp.get_property_native(prop)
+        --mp.msg.error("prop: ", prop, " value: ", value, "result: ", result, "typweof: ", type(value))
 
-        -- Handle resolution translation after property replacement
-        if input and input:match("%?%(p%)") then
-            local res = Button.getVideoResolutionLabel() or ""
-            input = input:gsub("%?%(p%)", res)
-        end
-        -- Handle format translation after property replacement
-        if input and input:match("%?%(f%)") then
-            local format = Button.getMediaFormatLabel() or ""
-            input = input:gsub("%?%(f%)", format)
-        end
+        if value == nil then return "prop not found " .. prop end
         
-        local result = input
-        --local has_properties = false
-        local props = extract_properties(input) 
-        if not props then return input end
-        
-        --mp.msg.error("props: ", mp.utils.format_json(props))
-        
-        for _, prop in ipairs(props) do
-
-            local value = mp.get_property(prop)
-            --mp.msg.error("prop: ", prop, " value: ", value, "result: ", result)
-
-            if not value then return "prop not found " .. prop end
-
-            local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
-            
-            if active and (value == "" or 
-                           value == "no" or 
-                           value == "false" or
-                           value == false or
-                           value == "0" or 
-                           value == 0) then
-            result = nil
-            else
-            result = result:gsub(pattern, value)
-            end
-
-            --mp.msg.error("prop: " .. prop .. " value: " .. tostring(value))
-            --mp.msg.error("checks:")
-            --mp.msg.error("nil check: " .. tostring(value == nil))
-            --mp.msg.error("empty check: " .. tostring(value == ""))
-            --mp.msg.error("no check: " .. tostring(value == "no"))
-            --mp.msg.error("no pattern check: " .. tostring(value:match("no") ~= nil))
-            --mp.msg.error("0 check: " .. tostring(value == 0))
-            --mp.msg.error("false bool check: " .. tostring(value == false))
-            --mp.msg.error("false string check: " .. tostring(value == "false"))
-            --mp.msg.error("false pattern check: " .. tostring(value:match("false") ~= nil))
-            --mp.msg.error("0 pattern check: " .. tostring(value:match("0") ~= nil))
-            --
-            --if value and not (value == nil or 
-            --                  value == "" or 
-            --                  value == "no" or 
-            --                  value:match("no") or 
-            --                  value == 0 or 
-            --                  value == false or 
-            --                  value == "false"  or 
-            --                  value:match("false")or
-            --                  value:match("0")) then
-            --                    
-            --              
-            --    local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
-            --    result = result:gsub(pattern, value)
-            --else 
-            --    if active then
-            --        result = nil
-            --    elseif value and  value ~= "" then
-            --        local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
-            --        result = result:gsub(pattern, value)
-            --    else
-            --        mp.msg.warn("wtf", value)
-            --    end
-            --end
+        if active and (value == "" or 
+                       value == "no" or 
+                       value == "false" or
+                       value == false or
+                       value == "0" or 
+                       value == 0) then
+            return nil
         end
 
-        return result or nil
+
+        local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
+        result = result:gsub(pattern, value)
+
     end
 
+    return result or nil
+end
+--MARK: update_state
+function Button:update_state(state_name)
 
+    local state = self.states[state_name]
 
     --if state then state.active = (state.active == "true") end
     if state and state.active == "true" then state.active = true end
@@ -421,15 +378,15 @@ function Button:update_state(state_name)
     if state and state.badge == "nil" then state.badge = nil end
 
     if state then
-        local tooltip = replace_properties(state.tooltip)
-        local badge   = replace_properties(state.badge)
-        local active  = replace_properties(state.active, true)
+        local tooltip = self:replace_properties(state.tooltip)
+        local badge   = self:replace_properties(state.badge)
+        local active  = self:replace_properties(state.active, true)
 
         mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
             icon    = state.icon,
-            badge   = badge,-- or state.badge,
-            active  = active,--not active_is_property and state.active or active,
-            tooltip = tooltip,--not tooltip_is_property and state.tooltip or tooltip,
+            badge   = badge,
+            active  = active,
+            tooltip = tooltip,
             command = state.command,
         }))
     else
@@ -933,3 +890,5 @@ mp.register_script_message('receive-button', function(button_name, button_json)
     local modified_json = mp.utils.format_json(button)
     mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-button', button_name, modified_json)
 end)
+
+--TODO: check if props are initially set
