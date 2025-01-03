@@ -582,10 +582,39 @@ function ButtonManager:register_default_handlers()
         self:show_default(nil)
     end)
 end
+
+function ButtonManager:update_unique_states(button_states)
+    mp.msg.debug("Starting update_unique_states")
+    --mp.msg.error("Current unique states: " .. mp.utils.format_json(self.unique_states))
+    --mp.msg.error("New button states: " .. mp.utils.format_json(button_states))
+
+    -- Find new states
+    local new_states = {}
+    for state in pairs(button_states) do
+        if not self.unique_states[state] then
+            mp.msg.debug("Found new state: " .. state)
+            new_states[state] = true
+            self.unique_states[state] = true
+        end
+    end
+
+    -- If new states were found, update all existing buttons
+    if next(new_states) then
+        mp.msg.debug("Updating existing buttons with new states")
+        for button_name, button in pairs(self.buttons) do
+            for state in pairs(new_states) do
+                if not button.states[state] then
+                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
+                    button.states[state] = button.states[self.key_states['default']]
+                end
+            end
+        end
+    else
+        mp.msg.debug("No new states found, skipping button updates")
+    end
+end
+
 --MARK: BM END
-
-
-
 
 
 
@@ -850,17 +879,16 @@ mp.register_script_message('set-button', function(...)
     local states_json = table.concat(args, " ", 2)
     
     local button_states = mp.utils.parse_json(states_json)
-    for state in pairs(manager.unique_states) do
-        if not button_states[state] then
-            button_states[state] = button_states[manager.key_states['default']]
-        end
-    end
+    manager:update_unique_states(button_states)
+
+    
     for _,state in pairs(button_states) do
         state = ensure_porper_props(state)
     end
     manager:initialize_button(button_name, button_states)
     manager:set_button_state(manager.current_active_state)
 end)
+
 mp.register_script_message('get-button', function(button_receiver, button_name)
     if manager.buttons[button_name] then
         local button_json = mp.utils.format_json(manager.buttons[button_name].states)
@@ -872,23 +900,26 @@ end)
 
 
 --test 
-mp.register_script_message('receive-buttons', function(buttons)
-    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-buttons', buttons)
-end)
-mp.register_script_message('init-receive-button', function(button_name)
-    mp.commandv('script-message-to', 'uosc_controls_modifier', 'get-button', script_name, button_name)
-end)
-mp.register_script_message('receive-button', function(button_name, button_json)
-    print("receive-button", button_name, button_json)
-    local button = mp.utils.parse_json(button_json)
-    -- Modify state_1 
-    button.state_1.icon = "new_icon"
-    button.state_1.tooltip = "New Tooltip"
-    
-    print("button_modified:", mp.utils.format_json(button))
-    -- Send back modified configuration using add-button
-    local modified_json = mp.utils.format_json(button)
-    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-button', button_name, modified_json)
-end)
+--mp.register_script_message('receive-buttons', function(buttons)
+--    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-buttons', buttons)
+--end)
+--mp.register_script_message('init-receive-button', function(button_name)
+--    mp.commandv('script-message-to', 'uosc_controls_modifier', 'get-button', script_name, button_name)
+--end)
+--mp.register_script_message('receive-button', function(button_name, button_json)
+--    print("receive-button", button_name, button_json)
+--    local button = mp.utils.parse_json(button_json)
+--    -- Modify state_1 
+--    button.state_1.icon = "new_icon"
+--    button.state_1.tooltip = "New Tooltip"
+--
+--    print("button_modified:", mp.utils.format_json(button))
+--    -- Send back modified configuration using add-button
+--    local modified_json = mp.utils.format_json(button)
+--    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-button', button_name, modified_json)
+--end)
 
---TODO: check if props are initially set
+--TODO: check if props are initially set. what does this mean?
+--TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
+--TODO: first click shows first state until nth state and a final click makes the content button invisible again.
+--TODO: would be usefull for one state contrast one state brightness etc.
