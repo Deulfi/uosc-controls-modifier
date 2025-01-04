@@ -255,7 +255,7 @@ function Button:initialize_states(default_state_name)
         end
     end
 
-    -- Fill other states with values from the first_state
+    -- Fill other states with values from the first_state (default)
     for state_name, state in pairs(self.states) do
         for key, fill_value in pairs(first_state or DEFAULT_STATE) do
             -- Only fill empty state values, except for 'active' properties
@@ -356,7 +356,7 @@ function Button:replace_properties(input, active)
                        value == false or
                        value == "0" or 
                        value == 0) then
-            return nil
+            return false
         end
 
 
@@ -370,14 +370,19 @@ end
 --MARK: update_state
 function Button:update_state(state_name)
 
+    --for states in pairs(self.states) do
+    --    mp.msg.error("name", self.name, "state: ", states, "state_name: ", state_name)
+    --end
+
     local state = self.states[state_name]
 
-    --if state then state.active = (state.active == "true") end
-    if state and state.active == "true" then state.active = true end
-    if state and state.active == "false" then state.active = false end
-    if state and state.badge == "nil" then state.badge = nil end
-
     if state then
+        
+        --if state then state.active = (state.active == "true") end
+        if state.active == "true" then state.active = true end
+        if state.active == "false" then state.active = false end
+        if state.badge == "nil" then state.badge = nil end
+
         local tooltip = self:replace_properties(state.tooltip)
         local badge   = self:replace_properties(state.badge)
         local active  = self:replace_properties(state.active, true)
@@ -390,7 +395,7 @@ function Button:update_state(state_name)
             command = state.command,
         }))
     else
-        mp.msg.error("Unknown state:",state, "name:", state_name)
+        mp.msg.warn("Unknown state:",state, "name:", state_name, "button:", self.name)  
     end
 end
 --MARK: ButtonManager
@@ -400,9 +405,9 @@ ButtonManager.__index = ButtonManager
 
 function ButtonManager.new()
     local self = setmetatable({}, ButtonManager)
-    self.buttons = {}
-    self.key_states = {}
-    self.unique_states = {}
+    self.buttons              = {}
+    self.key_states           = {}
+    self.unique_states        = {}
     self.current_active_state = ""
     return self
 end
@@ -411,8 +416,9 @@ function ButtonManager:init()
     self.key_states = options.key_states
     self.default_state_names = {[self.key_states['default']] = true}
     self.current_active_state = 'default'
-    self:lookup_unique_states()
+    
     self:initialize_buttons()
+    self:manage_unique_states()
 
     local function temp()
         self:show_default(nil)
@@ -421,13 +427,74 @@ function ButtonManager:init()
     mp.observe_property("idle", "string", temp)
 end
 
-function ButtonManager:lookup_unique_states()
-    for _, button in pairs(options.buttons) do
-        for state in pairs(button) do
+function ButtonManager:manage_unique_states(button_states)
+    local source = button_states or options.buttons
+    local new_states = {}
+
+    -- Extract states from either button_states or options.buttons
+    for _, button_data in pairs(source) do
+        local states_to_check = button_states and button_data.states or button_data
+        for state in pairs(states_to_check) do
+            if not self.unique_states[state] then
+                mp.msg.debug("Found new state: " .. state)
+                new_states[state] = true
+            end
             self.unique_states[state] = true
         end
     end
+    -- Update existing buttons with new states if any were found
+    --TODO: think if we really need this. remove warn from button.update_state if not needed
+    if next(new_states) then
+        mp.msg.debug("Updating existing buttons with new states")
+        for button_name, button in pairs(self.buttons) do
+            for state in pairs(new_states) do
+                if not button.states[state] then
+                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
+                    button.states[state] = button.states[self.key_states['default']]
+                end
+            end
+        end
+    end
 end
+
+--function ButtonManager:lookup_unique_states()
+--    for _, button in pairs(options.buttons) do
+--        for state in pairs(button) do
+--            self.unique_states[state] = true
+--        end
+--    end
+--end
+--
+--function ButtonManager:update_unique_states(button_states)
+--    mp.msg.debug("Starting update_unique_states")
+--    --mp.msg.error("Current unique states: " .. mp.utils.format_json(self.unique_states))
+--    --mp.msg.error("New button states: " .. mp.utils.format_json(button_states))
+--
+--    -- Find new states
+--    local new_states = {}
+--    for state in pairs(button_states) do
+--        if not self.unique_states[state] then
+--            mp.msg.debug("Found new state: " .. state)
+--            new_states[state] = true
+--            self.unique_states[state] = true
+--        end
+--    end
+--
+--    -- If new states were found, update all existing buttons
+--    if next(new_states) then
+--        mp.msg.debug("Updating existing buttons with new states")
+--        for button_name, button in pairs(self.buttons) do
+--            for state in pairs(new_states) do
+--                if not button.states[state] then
+--                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
+--                    button.states[state] = button.states[self.key_states['default']]
+--                end
+--            end
+--        end
+--    else
+--        mp.msg.debug("No new states found, skipping button updates")
+--    end
+--end
 
 function ButtonManager:initialize_buttons()
     for button_name, button_states in pairs(options.buttons) do
@@ -440,11 +507,11 @@ function ButtonManager:initialize_button(button_name, button_states)
         button:initialize_states(self.key_states['default'])
         
         -- Fill missing states with defaults
-        for state in pairs(self.unique_states) do
-            if not button.states[state] then
-                button.states[state] = button.states[self.key_states['default']]
-            end
-        end
+        --for state in pairs(self.unique_states) do
+        --    if not button.states[state] then
+        --        button.states[state] = button.states[self.key_states['default']]
+        --    end
+        --end
 
         -- script message to set state for one button
         mp.register_script_message('set-button-state', function(button_name,state_name)
@@ -485,7 +552,7 @@ end
 
 function ButtonManager:register_message_handlers()
     for state_name in pairs(self.unique_states) do
-        print("register_message_handlers", 'set ' .. state_name)
+        mp.msg.debug("register_message_handlers", 'set ' .. state_name)
         if state_name then
             mp.register_script_message('set', function(state_name)
                 self:set_button_state(state_name)
@@ -563,7 +630,7 @@ end
 -- we can use the set_default script message in other scripts/auto profile
 --MARK: default_handlers
 function ButtonManager:register_default_handlers()
-    print("register_default_handlers", mp.utils.format_json(self.key_states))
+    mp.msg.debug("register_default_handlers", mp.utils.format_json(self.key_states))
     local saved_key_states = shallow_copy(self.key_states)
 
     mp.register_script_message('set-default', function(new_default_state)
@@ -583,36 +650,7 @@ function ButtonManager:register_default_handlers()
     end)
 end
 
-function ButtonManager:update_unique_states(button_states)
-    mp.msg.debug("Starting update_unique_states")
-    --mp.msg.error("Current unique states: " .. mp.utils.format_json(self.unique_states))
-    --mp.msg.error("New button states: " .. mp.utils.format_json(button_states))
 
-    -- Find new states
-    local new_states = {}
-    for state in pairs(button_states) do
-        if not self.unique_states[state] then
-            mp.msg.debug("Found new state: " .. state)
-            new_states[state] = true
-            self.unique_states[state] = true
-        end
-    end
-
-    -- If new states were found, update all existing buttons
-    if next(new_states) then
-        mp.msg.debug("Updating existing buttons with new states")
-        for button_name, button in pairs(self.buttons) do
-            for state in pairs(new_states) do
-                if not button.states[state] then
-                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
-                    button.states[state] = button.states[self.key_states['default']]
-                end
-            end
-        end
-    else
-        mp.msg.debug("No new states found, skipping button updates")
-    end
-end
 
 --MARK: BM END
 
@@ -879,7 +917,7 @@ mp.register_script_message('set-button', function(...)
     local states_json = table.concat(args, " ", 2)
     
     local button_states = mp.utils.parse_json(states_json)
-    manager:update_unique_states(button_states)
+    manager:manage_unique_states(button_states)
 
     
     for _,state in pairs(button_states) do
