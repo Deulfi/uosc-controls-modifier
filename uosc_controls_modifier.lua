@@ -184,6 +184,8 @@ local options = {
   button28 = "",
   button29 = "",
   button30 = "",
+
+  fill_up_states = false,
 }
 mp.utils = require "mp.utils"
 mp.options = require "mp.options"
@@ -395,7 +397,9 @@ function Button:update_state(state_name)
             command = state.command,
         }))
     else
-        mp.msg.warn("Unknown state:",state, "name:", state_name, "button:", self.name)  
+        if options.fill_up_states then
+            mp.msg.warn("Unknown state:",state, "name:", state_name, "button:", self.name)
+        end
     end
 end
 --MARK: ButtonManager
@@ -420,11 +424,12 @@ function ButtonManager:init()
     self:initialize_buttons()
     self:manage_unique_states()
 
-    local function temp()
-        self:show_default(nil)
-        mp.unobserve_property(temp)
-    end
-    mp.observe_property("idle", "string", temp)
+    --local function temp()
+    --    mp.msg.warn("-_-_-_-_-_- MPV is idle, showing default -_-_-_-_-_-")
+    --    self:show_default(nil)
+    --    mp.unobserve_property(temp)
+    --end
+    --mp.observe_property("idle", "string", temp)
 end
 
 function ButtonManager:manage_unique_states(button_states)
@@ -444,7 +449,7 @@ function ButtonManager:manage_unique_states(button_states)
     end
     -- Update existing buttons with new states if any were found
     --TODO: think if we really need this. remove warn from button.update_state if not needed
-    if next(new_states) then
+    if next(new_states) and not options.fill_up_states then
         mp.msg.debug("Updating existing buttons with new states")
         for button_name, button in pairs(self.buttons) do
             for state in pairs(new_states) do
@@ -537,14 +542,18 @@ function ButtonManager:show_default(delay)
     local state_name = self.modifier_state_map['default']
     
     if delay then
+        
+        --mp.add_timeout(options.revert_delay, function()
+            --if options.revert_delay > 1 then
+            --    mp.msg.error("revert_delay is long enough")
+            --    self:set_button_state(self.current_active_state)
+            --end
         -- update it before changing it to default because we assume we clicked a button and want
         -- to show a changed active state of the button
-        mp.add_timeout(options.revert_delay, function()
-            self:set_button_state(self.current_active_state)
-            mp.add_timeout(0.1, function()
-                self:set_button_state(state_name)
-            end)
+        mp.add_timeout((options.revert_delay/10) + 0.20, function()
+            self:set_button_state(state_name)
         end)
+        --end)
     else
        self:set_button_state(state_name)
     end
@@ -566,64 +575,48 @@ function ButtonManager:update_button(button_name)
 end
 --MARK: prop_observers
 function ButtonManager:register_property_observers()
-    local property_to_buttons = {}
+    local property_observers = {}
 
-    local function register_property_observer(prop, button_name)
-        if type(prop) ~= "string" or prop == "" then return end
+    local function register_property_observer(property_name, button_name)
+        if not (type(property_name) == "string" and property_name ~= "") then return end
         
-        if not property_to_buttons[prop] then
-            property_to_buttons[prop] = {}
-            mp.observe_property(prop, "string", function()
-                -- Only update buttons that depend on this property
-                for btn_name in pairs(property_to_buttons[prop]) do
-                    self:update_button(btn_name)
+        if not property_observers[property_name] then
+            property_observers[property_name] = {}
+            mp.observe_property(property_name, "string", function()
+                for observed_button in pairs(property_observers[property_name]) do
+                    self:update_button(observed_button)
                 end
             end)
         end
-        property_to_buttons[prop][button_name] = true
+        property_observers[property_name][button_name] = true
     end
 
-    local function handle_properties(str, button_name)
-        if not str then return end
-        str = tostring(str)
+    local function register_dynamic_properties(property_string, button_name)
+        if not property_string then return end
+        property_string = tostring(property_string)
 
-        if str:find("%?%(f%)") then
-            if not property_to_buttons["file-loaded"] then
-                property_to_buttons["file-loaded"] = {}
-                mp.register_event("file-loaded", function()
-                    for btn_name in pairs(property_to_buttons["file-loaded"]) do
-                        self:update_button(btn_name)
-                    end
-                end)
-            end
-            property_to_buttons["file-loaded"][button_name] = true
+        -- Handle special format and resolution placeholders
+        if property_string:find("%?%(f%)") or property_string:find("%?%(p%)") then
+            register_property_observer("file-loaded", button_name)
         end
 
-
-        local props = extract_properties(str) or {}
-        for tmp,prop in pairs(props) do
-            --mp.msg.error("handle props", tmp, "and", prop)
-            register_property_observer(prop, button_name)
+        -- Handle regular properties enclosed in [[]]
+        local extracted_properties = extract_properties(property_string) or {}
+        for _, property_name in pairs(extracted_properties) do
+            register_property_observer(property_name, button_name)
         end
     end
 
+    -- Iterate through all buttons and their states to register observers
     for button_name, button in pairs(self.buttons) do
         for _, state in pairs(button.states) do
-            if state.active or state.badge or state.tooltip then
-                if state.active then
-                    handle_properties(state.active, button_name)
-                end
-                if state.badge then
-                    handle_properties(state.badge, button_name)
-                end
-                if state.tooltip then
-                    handle_properties(state.tooltip, button_name)
-                end
-            end
+            if state.active  then register_dynamic_properties(state.active,  button_name) end
+            if state.badge   then register_dynamic_properties(state.badge,   button_name) end
+            if state.tooltip then register_dynamic_properties(state.tooltip, button_name) end
         end
     end
-
 end
+
 
 
 -- in case we want another state as default. For example, if we want ta have state_3 as default in fullscreen
@@ -823,7 +816,7 @@ local function parse_modifier_keys()
         mp.msg.error("No default state defined in modifier_keys:", mp.utils.to_string(options.modifier_keys))
     end
     options.modifier_state_map = modifier_state_map
-    return modifier_state_map
+    --return modifier_state_map
 end
 
 
