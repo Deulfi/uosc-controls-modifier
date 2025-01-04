@@ -190,7 +190,7 @@ mp.options = require "mp.options"
 local script_name = mp.get_script_name()
 mp.options.read_options(options, script_name)
 local res_table = {}
-local key_states = {}
+local modifier_state_map = {}
 
 
 --MARK: extract props
@@ -406,15 +406,15 @@ ButtonManager.__index = ButtonManager
 function ButtonManager.new()
     local self = setmetatable({}, ButtonManager)
     self.buttons              = {}
-    self.key_states           = {}
+    self.modifier_state_map           = {}
     self.unique_states        = {}
     self.current_active_state = ""
     return self
 end
 
 function ButtonManager:init()
-    self.key_states = options.key_states
-    self.default_state_names = {[self.key_states['default']] = true}
+    self.modifier_state_map = options.modifier_state_map
+    self.default_state_names = {[self.modifier_state_map['default']] = true}
     self.current_active_state = 'default'
     
     self:initialize_buttons()
@@ -450,7 +450,7 @@ function ButtonManager:manage_unique_states(button_states)
             for state in pairs(new_states) do
                 if not button.states[state] then
                     mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
-                    button.states[state] = button.states[self.key_states['default']]
+                    button.states[state] = button.states[self.modifier_state_map['default']]
                 end
             end
         end
@@ -487,7 +487,7 @@ end
 --            for state in pairs(new_states) do
 --                if not button.states[state] then
 --                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
---                    button.states[state] = button.states[self.key_states['default']]
+--                    button.states[state] = button.states[self.modifier_state_map['default']]
 --                end
 --            end
 --        end
@@ -503,13 +503,13 @@ function ButtonManager:initialize_buttons()
 end
 function ButtonManager:initialize_button(button_name, button_states)
     local button = Button.new(button_name, button_states)
-        if self.key_states and self.key_states['default'] then
-        button:initialize_states(self.key_states['default'])
+        if self.modifier_state_map and self.modifier_state_map['default'] then
+        button:initialize_states(self.modifier_state_map['default'])
         
         -- Fill missing states with defaults
         --for state in pairs(self.unique_states) do
         --    if not button.states[state] then
-        --        button.states[state] = button.states[self.key_states['default']]
+        --        button.states[state] = button.states[self.modifier_state_map['default']]
         --    end
         --end
 
@@ -534,7 +534,7 @@ function ButtonManager:set_button_state(state_name)
 end
 
 function ButtonManager:show_default(delay)
-    local state_name = self.key_states['default']
+    local state_name = self.modifier_state_map['default']
     
     if delay then
         -- update it before changing it to default because we assume we clicked a button and want
@@ -630,22 +630,22 @@ end
 -- we can use the set_default script message in other scripts/auto profile
 --MARK: default_handlers
 function ButtonManager:register_default_handlers()
-    mp.msg.debug("register_default_handlers", mp.utils.format_json(self.key_states))
-    local saved_key_states = shallow_copy(self.key_states)
+    mp.msg.debug("register_default_handlers", mp.utils.format_json(self.modifier_state_map))
+    local saved_modifier_state_map = shallow_copy(self.modifier_state_map)
 
     mp.register_script_message('set-default', function(new_default_state)
-        local old_state = self.key_states['default']
-        for key, state_name in pairs(self.key_states) do
+        local old_state = self.modifier_state_map['default']
+        for key, state_name in pairs(self.modifier_state_map) do
             if state_name == new_default_state then
-                self.key_states[key] = old_state
+                self.modifier_state_map[key] = old_state
             end
         end
-        self.key_states['default'] = new_default_state
+        self.modifier_state_map['default'] = new_default_state
         self:show_default(nil)
     end)
 
     mp.register_script_message('revert-default', function()
-        self.key_states = shallow_copy(saved_key_states)
+        self.modifier_state_map = shallow_copy(saved_modifier_state_map)
         self:show_default(nil)
     end)
 end
@@ -768,10 +768,10 @@ function build_buttons_table()
         for _, state_def in ipairs(split(remaining_config, ",")) do
             local state_name, properties = unpack(split(state_def, "@"))
             
-            -- Initialize key_states with first state as default in case user didn't want userinput
+            -- Initialize modifier_state_map with first state as default in case user didn't want userinput
             -- and therfore no keystates
-            if not options.key_states then 
-                options.key_states = { default = state_name } 
+            if not options.modifier_state_map then 
+                options.modifier_state_map = { default = state_name } 
             end
             
             if state_name then
@@ -814,16 +814,16 @@ local function parse_modifier_keys()
     
     if not options.modifier_keys or type(options.modifier_keys) ~= "string" then
         mp.msg.warn("Invalid modifier_keys configuration")
-        return key_states
+        return modifier_state_map
     end
 
-    local key_states = split(options.modifier_keys, ",", ":")
+    local modifier_state_map = split(options.modifier_keys, ",", ":")
 
-    if not key_states or not key_states["default"] then
+    if not modifier_state_map or not modifier_state_map["default"] then
         mp.msg.error("No default state defined in modifier_keys:", mp.utils.to_string(options.modifier_keys))
     end
-    options.key_states = key_states
-    return key_states
+    options.modifier_state_map = modifier_state_map
+    return modifier_state_map
 end
 
 
@@ -832,7 +832,7 @@ end
 --MARK: inpute_event
 local function setup_input_events(manager)
 
-    for key, state_name in pairs(options.key_states) do
+    for key, state_name in pairs(options.modifier_state_map) do
         if state_name ~= 'default' then
             local on = {
                 press = "script-message-to " .. mp.get_script_name() .. " set " .. state_name,
@@ -876,7 +876,7 @@ end
 function setup_manager()
 
     local manager = ButtonManager.new()
-    manager:init(key_states)
+    manager:init(modifier_state_map)
     manager:register_message_handlers()
     manager:register_property_observers()
     if options.use_inputevent then
@@ -909,7 +909,7 @@ mp.register_script_message('set-buttons', function(buttons_json)
         translated[button_name] = button_data.states
     end
     options.buttons = translated
-    manager = setup_manager(key_states)
+    manager = setup_manager(modifier_state_map)
 end)
 mp.register_script_message('set-button', function(...)
     local args = {...}
@@ -957,6 +957,7 @@ end)
 --    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-button', button_name, modified_json)
 --end)
 
+--TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
 --TODO: check if props are initially set. what does this mean?
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --TODO: first click shows first state until nth state and a final click makes the content button invisible again.
