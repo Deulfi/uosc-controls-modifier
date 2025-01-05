@@ -556,6 +556,14 @@ function ButtonManager:register_message_handlers()
         mp.msg.debug("register_message_handlers", 'set ' .. state_name)
         if state_name then
             mp.register_script_message('set', function(state_name)
+                -- curent cycle index for updating (possible for cycle button badge)
+                for i, state in ipairs(options.state_cycle_map) do
+                    if state == state_name then
+                        mp.set_property_number("user-data/ucm_currstate", i)
+                        break
+                    end
+                end
+
                 self:set_button_state(state_name)
             end)
         end
