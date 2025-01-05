@@ -9,6 +9,8 @@ local options = {
 
   use_inputevent = true,
 
+  state_cycle_map="state_1,state_2,state_3",
+
   --res_table = {
   --  { resolution = "1280x720", description = "HDTV" },
   --  { resolution = "1920x1080", description = "FHD" },
@@ -195,6 +197,7 @@ local res_table = {}
 local modifier_state_map = {}
 
 
+
 --MARK: extract props
 -- Helper function to extract properties enclosed in double square brackets
 local function extract_properties(input_string)
@@ -210,7 +213,7 @@ end
 --MARK: split
 local function split(input_string, primary_separator, key_value_separator)
     local result = {}
-    
+    if not input_string then return nil end
     for item in input_string:gmatch(string.format("([^%s]+)", primary_separator)) do
         if key_value_separator then
             local key, value = item:match("(.+)" .. key_value_separator .. "(.+)")
@@ -244,11 +247,15 @@ function Button.new(name, states)
     local self = setmetatable({}, Button)
     self.name = name
     self.states = states
+    self.active_state = nil
+    self.default_state_name = ""
     return self
 end
 
 function Button:initialize_states(default_state_name)
     -- Find and initialize the Default State
+    self.default_state_name = default_state_name
+    self.active_state = self.states[default_state_name]
     local first_state = self.states[default_state_name]
     if first_state then
         -- Fill Default State with default values
@@ -322,23 +329,27 @@ function Button.getMediaFormatLabel(format)
     end
     return extension
 end
---MARK: replace_properties
+--MARK: replace_props
 function Button:replace_properties(input, active)
     --mp.msg.debug("input: ", input)
     if type(input) ~= "string" then return nil end
     if input == "" then return nil end
 
-    -- Handle resolution translation after property replacement
-    if input and input:match("%?%(p%)") then
-        local res = Button.getVideoResolutionLabel() or ""
-        input = input:gsub("%?%(p%)", res)
+    local function replace_special_notation(input, pattern, replacement)
+        if input and input:match(pattern) then
+            local replacement_value = type(replacement) == "function" and replacement() or replacement
+            input = input:gsub(pattern, replacement_value)
+        end
+        return input
     end
-    -- Handle format translation after property replacement
-    if input and input:match("%?%(f%)") then
-        local format = Button.getMediaFormatLabel() or ""
-        input = input:gsub("%?%(f%)", format)
-    end
-    
+
+    input = replace_special_notation(input, "%?%(p%)", Button.getVideoResolutionLabel)
+    input = replace_special_notation(input, "%?%(f%)", Button.getMediaFormatLabel)
+    --input = replace_special_notation(input, "%?%(c%)", self.manager.current_active_state_number)
+    input = replace_special_notation(input, "%?%(c%)", function() 
+        return mp.get_property_number("user-data/ucm_currstate") or 1 end)
+
+
     local result = input
     local props = extract_properties(input) 
     if not props then return input end
@@ -369,6 +380,34 @@ function Button:replace_properties(input, active)
 
     return result or nil
 end
+function Button:replace_commands(input)
+    local special_notation = {
+        {
+            shortcut = "%?%(c%-%)",
+            action = "script-message-to " .. script_name .. " cycle-back"
+        },
+        {
+            shortcut = "%?%(c%)",
+            action = "script-message-to " .. script_name .. " cycle"
+        }
+        -- New patterns can be added here following the same structure:
+        -- { pattern = "pattern_to_match", replacement = "command_to_execute" }
+    }
+
+    local result = tostring(input)
+    
+    for _, mapping in ipairs(special_notation) do
+        if result:match(mapping.shortcut) then
+            result = result:gsub(mapping.shortcut, mapping.action)
+        end
+    end
+
+    return result
+end
+
+function Button:update_default_state()
+    self:update_state(self.default_state_name)
+end
 --MARK: update_state
 function Button:update_state(state_name)
 
@@ -376,25 +415,26 @@ function Button:update_state(state_name)
     --    mp.msg.error("name", self.name, "state: ", states, "state_name: ", state_name)
     --end
 
-    local state = self.states[state_name]
-
+    local state = self.states[state_name] or self.active_state
+    --mp.msg.error("name", self.name, "state: ", state, "state_name: ", state_name)
     if state then
-        
+        self.active_state = state
         --if state then state.active = (state.active == "true") end
-        if state.active == "true" then state.active = true end
+        --if state.active == "true" then state.active = true end
         if state.active == "false" then state.active = false end
         if state.badge == "nil" then state.badge = nil end
 
         local tooltip = self:replace_properties(state.tooltip)
         local badge   = self:replace_properties(state.badge)
         local active  = self:replace_properties(state.active, true)
+        local command = self:replace_commands(state.command)
 
         mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
             icon    = state.icon,
             badge   = badge,
             active  = active,
             tooltip = tooltip,
-            command = state.command,
+            command = command,
         }))
     else
         if options.fill_up_states then
@@ -413,6 +453,7 @@ function ButtonManager.new()
     self.modifier_state_map           = {}
     self.unique_states        = {}
     self.current_active_state = ""
+    self.current_active_state_number = 1
     return self
 end
 
@@ -423,15 +464,11 @@ function ButtonManager:init()
     
     self:initialize_buttons()
     self:manage_unique_states()
+    mp.set_property("user-data/ucm_currstate", 1)
 
-    --local function temp()
-    --    mp.msg.warn("-_-_-_-_-_- MPV is idle, showing default -_-_-_-_-_-")
-    --    self:show_default(nil)
-    --    mp.unobserve_property(temp)
-    --end
-    --mp.observe_property("idle", "string", temp)
 end
 
+--MARK: manage uniques
 function ButtonManager:manage_unique_states(button_states)
     local source = button_states or options.buttons
     local new_states = {}
@@ -447,14 +484,13 @@ function ButtonManager:manage_unique_states(button_states)
             self.unique_states[state] = true
         end
     end
-    -- Update existing buttons with new states if any were found
-    --TODO: think if we really need this. remove warn from button.update_state if not needed
+
     if next(new_states) and not options.fill_up_states then
         mp.msg.debug("Updating existing buttons with new states")
-        for button_name, button in pairs(self.buttons) do
-            for state in pairs(new_states) do
+        for _, button in ipairs(self.buttons) do
+            for _, state in ipairs(self.unique_states_map) do
                 if not button.states[state] then
-                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
+                    mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
                     button.states[state] = button.states[self.modifier_state_map['default']]
                 end
             end
@@ -462,44 +498,6 @@ function ButtonManager:manage_unique_states(button_states)
     end
 end
 
---function ButtonManager:lookup_unique_states()
---    for _, button in pairs(options.buttons) do
---        for state in pairs(button) do
---            self.unique_states[state] = true
---        end
---    end
---end
---
---function ButtonManager:update_unique_states(button_states)
---    mp.msg.debug("Starting update_unique_states")
---    --mp.msg.error("Current unique states: " .. mp.utils.format_json(self.unique_states))
---    --mp.msg.error("New button states: " .. mp.utils.format_json(button_states))
---
---    -- Find new states
---    local new_states = {}
---    for state in pairs(button_states) do
---        if not self.unique_states[state] then
---            mp.msg.debug("Found new state: " .. state)
---            new_states[state] = true
---            self.unique_states[state] = true
---        end
---    end
---
---    -- If new states were found, update all existing buttons
---    if next(new_states) then
---        mp.msg.debug("Updating existing buttons with new states")
---        for button_name, button in pairs(self.buttons) do
---            for state in pairs(new_states) do
---                if not button.states[state] then
---                    mp.msg.debug("Adding state " .. state .. " to button " .. button_name)
---                    button.states[state] = button.states[self.modifier_state_map['default']]
---                end
---            end
---        end
---    else
---        mp.msg.debug("No new states found, skipping button updates")
---    end
---end
 
 function ButtonManager:initialize_buttons()
     for button_name, button_states in pairs(options.buttons) do
@@ -511,13 +509,6 @@ function ButtonManager:initialize_button(button_name, button_states)
         if self.modifier_state_map and self.modifier_state_map['default'] then
         button:initialize_states(self.modifier_state_map['default'])
         
-        -- Fill missing states with defaults
-        --for state in pairs(self.unique_states) do
-        --    if not button.states[state] then
-        --        button.states[state] = button.states[self.modifier_state_map['default']]
-        --    end
-        --end
-
         -- script message to set state for one button
         mp.register_script_message('set-button-state', function(button_name,state_name)
             self.buttons[button_name]:update_state(state_name)
@@ -533,30 +524,31 @@ end
 function ButtonManager:set_button_state(state_name)
     mp.msg.trace("setting button state to " .. state_name)
     self.current_active_state = state_name
+
     for _, button in pairs(self.buttons) do
         button:update_state(state_name)
     end
 end
 
-function ButtonManager:show_default(delay)
+function ButtonManager:show_default()
     local state_name = self.modifier_state_map['default']
     
-    if delay then
-        
-        --mp.add_timeout(options.revert_delay, function()
-            --if options.revert_delay > 1 then
-            --    mp.msg.error("revert_delay is long enough")
-            --    self:set_button_state(self.current_active_state)
-            --end
-        -- update it before changing it to default because we assume we clicked a button and want
-        -- to show a changed active state of the button
-        mp.add_timeout((options.revert_delay/10) + 0.20, function()
-            self:set_button_state(state_name)
-        end)
-        --end)
-    else
-       self:set_button_state(state_name)
-    end
+    --if delay then
+    --    
+    --    --mp.add_timeout(options.revert_delay, function()
+    --        --if options.revert_delay > 1 then
+    --        --    mp.msg.error("revert_delay is long enough")
+    --        --    self:set_button_state(self.current_active_state)
+    --        --end
+    --    -- update it before changing it to default because we assume we clicked a button and want
+    --    -- to show a changed active state of the button
+    --    mp.add_timeout((options.revert_delay/10) + 0.20, function()
+    --        self:set_button_state(state_name)
+    --    end)
+    --    --end)
+    --else
+    self:set_button_state(state_name)
+    --end
 end
 
 function ButtonManager:register_message_handlers()
@@ -571,8 +563,13 @@ function ButtonManager:register_message_handlers()
 end
 
 function ButtonManager:update_button(button_name)
-    self.buttons[button_name]:update_state(self.current_active_state)
+    --if not self.buttons[button_name].states[self.current_active_state] then
+    --    self.buttons[button_name]:update_state()
+    --end
+    --self.buttons[button_name]:update_state(self.current_active_state)
+    self.buttons[button_name]:update_state()
 end
+
 --MARK: prop_observers
 function ButtonManager:register_property_observers()
     local property_observers = {}
@@ -598,6 +595,11 @@ function ButtonManager:register_property_observers()
         -- Handle special format and resolution placeholders
         if property_string:find("%?%(f%)") or property_string:find("%?%(p%)") then
             register_property_observer("file-loaded", button_name)
+        end
+        -- Handle special cycle placeholders
+        if property_string:find("%?%(c%)") then
+            --mp.msg.error("cycle placeholder")
+            register_property_observer("user-data/ucm_currstate", button_name)
         end
 
         -- Handle regular properties enclosed in [[]]
@@ -634,12 +636,12 @@ function ButtonManager:register_default_handlers()
             end
         end
         self.modifier_state_map['default'] = new_default_state
-        self:show_default(nil)
+        self:show_default()
     end)
 
     mp.register_script_message('revert-default', function()
         self.modifier_state_map = shallow_copy(saved_modifier_state_map)
-        self:show_default(nil)
+        self:show_default()
     end)
 end
 
@@ -739,7 +741,7 @@ end
 
 --MARK: build_buttons
 -- Build button configuration table from options
-function build_buttons_table()
+local function parse_buttons_table()
     if options.buttons then return end
     options.buttons = {}
     
@@ -755,37 +757,36 @@ function build_buttons_table()
         button_name = button_name:gsub('"', '')
         local states = {}
         
-        -- Parse each state definition
-        --for state_def in remaining_config:gmatch("[^,]+") do
-        --    local state_name, properties = state_def:match("^%s*([^@]+)@(.+)")
-        for _, state_def in ipairs(split(remaining_config, ",")) do
+        -- Parse each state definition while maintaining order
+        local state_definitions = split(remaining_config, ",")
+        for _, state_def in ipairs(state_definitions) do
             local state_name, properties = unpack(split(state_def, "@"))
             
-            -- Initialize modifier_state_map with first state as default in case user didn't want userinput
-            -- and therfore no keystates
+            -- Initialize modifier_state_map with first state as default
             if not options.modifier_state_map then 
                 options.modifier_state_map = { default = state_name } 
             end
-            
-            if state_name then
+
+            local property_pairs = split(properties, ":")
+            if state_name and property_pairs then
                 local state = {}
                 
-                -- Parse properties for this state
-                for _,prop in ipairs(split(properties, ":")) do
-                    --local key, value = prop:match("^%s*(%w+)=(.+)%s*$")
+                
+                -- Parse properties while maintaining order
+                for _, prop in ipairs(property_pairs) do
                     local key, value = unpack(split(prop, "="))
                     if key and value then
-                        state[key] = value--:gsub('"', '')
+                        state[key] = value
                     end
                 end
                 
                 state = ensure_porper_props(state)
-                mp.msg.debug("statejson: " , mp.utils.format_json(state))
+                --mp.msg.debug("statejson: " , mp.utils.format_json(state))
                 
                 states[state_name] = state
             end
         end
-        
+
         options.buttons[button_name] = states
         button_index = button_index + 1
     end
@@ -819,8 +820,12 @@ local function parse_modifier_keys()
     --return modifier_state_map
 end
 
-
-
+local function parse_cycle_map(new_states)
+    local states_to_parse = new_states or options.state_cycle_map
+    if not states_to_parse then return end
+    if type(states_to_parse) ~= "string" then return end
+    options.state_cycle_map = split(options.state_cycle_map, ",")
+end
 
 --MARK: inpute_event
 local function setup_input_events(manager)
@@ -828,28 +833,23 @@ local function setup_input_events(manager)
     for key, state_name in pairs(options.modifier_state_map) do
         if state_name ~= 'default' then
             local on = {
-                press = "script-message-to " .. mp.get_script_name() .. " set " .. state_name,
-                release = "script-message-to " .. mp.get_script_name() .. " revert_inputevent"
+                --press = "script-message-to " .. script_name .. " revert_inputevent", ??? why and why did this work?????
+                press   = string.format("script-message-to %s set %s", script_name, state_name),
+                release = string.format("script-message-to %s revert_inputevent", script_name)
             }
             mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
         end
     end
     -- Register revert_inputevent message handler
     mp.register_script_message('revert_inputevent', function()
-        manager:show_default("delay")
+
+        mp.add_timeout((options.revert_delay/10) + 0.20, function()
+            manager:show_default("delay")
+            mp.set_property_number("user-data/ucm_currstate", 1)
+        end)
     end)
 end
 
---local function translate_res_translation()
---    for res_desc in options.res_translation:gmatch("([^,]+)") do
---        local resolution, description = res_desc:match("([^:]+):([^:]+)")
---        if resolution and description then
---            table.insert(res_table, { resolution = resolution, description = description })
---        else
---            mp.msg.warn("Invalid resolution translation format: " .. res_desc)
---        end
---    end
---end
 local function parse_resolution_mappings()
     if not options.res_translation or options.res_translation == "" then
         mp.msg.error("No or faulty resolution mappings defined in options")
@@ -881,14 +881,49 @@ end
 
 --MARK: Main
 parse_modifier_keys()
---translate_res_translation()
+parse_cycle_map()
 parse_resolution_mappings()
-build_buttons_table()
+parse_buttons_table()
 local manager = setup_manager()
 
 
 
 --MARK: script msg
+mp.register_script_message('cycle', function()
+    local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
+    local num_states = #options.state_cycle_map
+    local next_state = ((current_state) % num_states) + 1
+    
+    mp.set_property_number("user-data/ucm_currstate", next_state)
+    manager:set_button_state(options.state_cycle_map[next_state])
+end)
+mp.register_script_message('cycle-back', function()
+    local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
+    local num_states = #options.state_cycle_map
+    local next_state = ((current_state - 2) % num_states) + 1
+    
+    mp.set_property_number("user-data/ucm_currstate", next_state)
+    manager:set_button_state(options.state_cycle_map[next_state])
+end)
+mp.register_script_message('extend-cycle-states', function(new_states_to_cycle)
+    if not type(new_states_to_cycle) == "string" then mp.msg.error("new_states_to_cycle must be a string") return end
+    local new_states = split(new_states_to_cycle, ",")
+    for _, new_state in ipairs(new_states) do
+        table.insert(options.state_cycle_map, new_state)
+    end
+end)
+mp.register_script_message('get-cycle-states', function(receiver)
+    local cycle_states_json = mp.utils.format_json(options.state_cycle_map)
+    mp.commandv('script-message-to', receiver, 'receive-cycle-states', cycle_states_json)
+end)
+mp.register_script_message('set-cycle-states', function(new_states)
+    if type(new_states) ~= "string" then
+        mp.msg.error("new_states must be a string")
+        return
+    end
+    parse_cycle_map(new_states)
+end)
+
 mp.register_script_message('get-buttons', function(button_receiver)
     local buttons_json = mp.utils.format_json(manager.buttons)
     mp.commandv('script-message-to', button_receiver, 'receive-buttons', buttons_json)
@@ -930,26 +965,7 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
 end)
 
 
---test 
---mp.register_script_message('receive-buttons', function(buttons)
---    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-buttons', buttons)
---end)
---mp.register_script_message('init-receive-button', function(button_name)
---    mp.commandv('script-message-to', 'uosc_controls_modifier', 'get-button', script_name, button_name)
---end)
---mp.register_script_message('receive-button', function(button_name, button_json)
---    print("receive-button", button_name, button_json)
---    local button = mp.utils.parse_json(button_json)
---    -- Modify state_1 
---    button.state_1.icon = "new_icon"
---    button.state_1.tooltip = "New Tooltip"
---
---    print("button_modified:", mp.utils.format_json(button))
---    -- Send back modified configuration using add-button
---    local modified_json = mp.utils.format_json(button)
---    mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-button', button_name, modified_json)
---end)
-
+--TODO: current state as property?
 --TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
 --TODO: check if props are initially set. what does this mean?
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
