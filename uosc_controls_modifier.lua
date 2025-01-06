@@ -691,6 +691,16 @@ function PropertyManager:get_property(property_name)
     return self.cache[property_name]
 end
 
+function PropertyManager:process_state_fields(button_name, button_states, callback)
+    for _, state in pairs(button_states) do
+        for _, field in ipairs({'active', 'badge', 'tooltip'}) do
+            if state[field] then
+                callback(state, field, button_name)
+            end
+        end
+    end
+end
+
 function PropertyManager:handle_properties(field, button_name)
     -- Handle standard properties
     local props = self:extract_properties(field)
@@ -712,13 +722,16 @@ function PropertyManager:handle_properties(field, button_name)
 end
 
 function PropertyManager:watch_button_properties(button_name, button)
-    for _, state in pairs(button.states) do
-        for _, field in ipairs({state.active, state.badge, state.tooltip}) do
-            if field then
-                self:handle_properties(field, button_name)
-            end
-        end
-    end
+    --for _, state in pairs(button.states) do
+    --    for _, field in ipairs({state.active, state.badge, state.tooltip}) do
+    --        if field then
+    --            self:handle_properties(field, button_name)
+    --        end
+    --    end
+    --end
+    self:process_state_fields(button_name, button.states, function(field, button_name)
+        self:handle_properties(field, button_name)
+    end)
 end
 
 function PropertyManager:extract_properties(input_string)
@@ -731,25 +744,38 @@ function PropertyManager:extract_properties(input_string)
 end
 
 function PropertyManager:translate_button_properties(button_name, button_states)
-    for state_name, state in pairs(button_states) do
-        -- Process dynamic properties
-        local dynamic_fields = {"active", "tooltip", "badge"}
-        for _, field in ipairs(dynamic_fields) do
-            if state[field] then
-                local props = self:extract_properties(state[field])
-                if props then
-                    local processed_string, command = self:process_cycle_properties(
-                        state[field],
-                        props,
-                        state.command
-                    )
-                    state.command = command
-                    state[field] = processed_string
-                end
-            end
+    self:process_state_fields(button_name, button_states, function(state, field)
+        local props = self:extract_properties(state[field])
+        if props then
+            local processed_string, command = self:process_cycle_properties(
+                state[field],
+                props,
+                state.command
+            )
+            state.command = command
+            state[field] = processed_string
         end
-    end
+    end)
     
+    --for state_name, state in pairs(button_states) do
+    --    -- Process dynamic properties
+    --    local dynamic_fields = {"active", "tooltip", "badge"}
+    --    for _, field in ipairs(dynamic_fields) do
+    --        if state[field] then
+    --            local props = self:extract_properties(state[field])
+    --            if props then
+    --                local processed_string, command = self:process_cycle_properties(
+    --                    state[field],
+    --                    props,
+    --                    state.command
+    --                )
+    --                state.command = command
+    --                state[field] = processed_string
+    --            end
+    --        end
+    --    end
+    --end
+    --
     options.buttons[button_name] = button_states
     return button_states
 end
