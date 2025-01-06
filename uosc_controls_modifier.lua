@@ -195,7 +195,12 @@ local script_name = mp.get_script_name()
 mp.options.read_options(options, script_name)
 local res_table = {}
 local modifier_state_map = {}
-
+local PropertyManager = {}
+local placeholders = {
+    ["%?%(f%)"] = {"file-loaded", "video-format", "video-codec-name", "audio-codec-name"},
+    ["%?%(p%)"] = {"file-loaded", "video-params/w", "video-params/h"},
+    ["%?%(c%)"] = {"user-data/ucm_currstate"}
+}
 
 
 --MARK: extract props
@@ -472,25 +477,27 @@ ButtonManager.__index = ButtonManager
 function ButtonManager.new()
     local self = setmetatable({}, ButtonManager)
     self.buttons              = {}
+    self.property_manager = PropertyManager.new(self)
     self.modifier_state_map           = {}
     self.unique_states        = {}
     self.current_active_state = ""
-    self.current_active_state_number = 1
-    self.property_observers = {}
+    --self.current_active_state_number = 1
+    self.default_state_name = ""
+    --self.property_observers = {}
     return self
 end
 
 function ButtonManager:init()
     self.modifier_state_map = options.modifier_state_map
-    self.default_state_names = {[self.modifier_state_map['default']] = true}
-    self.current_active_state = 'default'
+    self.default_state_name = self.modifier_state_map['default']
+    --self.current_active_state = 'default'
+    self.current_active_state = self.default_state_name
     
     self:initialize_buttons()
     self:manage_unique_states()
-    mp.set_property("user-data/ucm_currstate", 1)
+    --mp.set_property("user-data/ucm_currstate", 1)
 
 end
-
 --MARK: manage uniques
 function ButtonManager:manage_unique_states(button_states)
     local source = button_states or options.buttons
@@ -528,8 +535,10 @@ function ButtonManager:initialize_buttons()
     end
 end
 function ButtonManager:initialize_button(button_name, button_states)
-    local button = Button.new(button_name, button_states)
-        if self.modifier_state_map and self.modifier_state_map['default'] then
+    local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
+    local button = Button.new(button_name, processed_states)
+    --local button = Button.new(button_name, button_states)
+    if self.modifier_state_map and self.modifier_state_map['default'] then
         button:initialize_states(self.modifier_state_map['default'])
         
         -- script message to set state for one button
@@ -555,31 +564,23 @@ end
 
 --MARK: show default
 function ButtonManager:show_default()
-    local state_name = self.modifier_state_map['default']
-    
-    --if delay then
-    --    
-    --    --mp.add_timeout(options.revert_delay, function()
-    --        --if options.revert_delay > 1 then
-    --        --    mp.msg.error("revert_delay is long enough")
-    --        --    self:set_button_state(self.current_active_state)
-    --        --end
-    --    -- update it before changing it to default because we assume we clicked a button and want
-    --    -- to show a changed active state of the button
-    --    mp.add_timeout((options.revert_delay/10) + 0.20, function()
-    --        self:set_button_state(state_name)
-    --    end)
-    --    --end)
-    --else
-    self:set_button_state(state_name)
-    --end
+    self:set_button_state(self.default_state_name)
 end
+
+
+
+
 --MARK: reg msg handlers
 function ButtonManager:register_message_handlers()
     for state_name in pairs(self.unique_states) do
         mp.msg.debug("register_message_handlers", 'set ' .. state_name)
         if state_name then
             mp.register_script_message('set', function(state_name)
+                if state_name == 'default' then
+                    self:show_default()
+                    mp.set_property_number("user-data/ucm_currstate", 1)
+                    return
+                end
                 -- curent cycle index for updating (possible for cycle button badge)
                 for i, state in ipairs(options.state_cycle_map) do
                     if state == state_name then
@@ -601,63 +602,10 @@ function ButtonManager:update_button(button_name)
 end
 
 function ButtonManager:register_property_observers()
-    local function observe_property(property_name, button_name)
-        if not property_name or type(property_name) ~= "string" then return end
-        
-        -- Create observer group if it doesn't exist
-        if not self.property_observers[property_name] then
-            self.property_observers[property_name] = {}
-            
-            -- Register the property observer
-            mp.observe_property(property_name, "string", function()
-                -- Update all buttons watching this property
-                for button in pairs(self.property_observers[property_name]) do
-                    self:update_button(button)
-                end
-            end)
-        end
-        
-        -- Add button to observer group
-        self.property_observers[property_name][button_name] = true
-    end
-
-    local function register_button_properties(property_text, button_name)
-        if not property_text then return end
-        
-        -- Handle special placeholders
-        local placeholders = {
-            ["%?%(f%)"] = "file-loaded",            -- Format placeholder
-            ["%?%(p%)"] = "file-loaded",            -- Resolution placeholder 
-            ["%?%(c%)"] = "user-data/ucm_currstate" -- Cycle placeholder
-        }
-
-        for pattern, property in pairs(placeholders) do
-            if property_text:find(pattern) then
-                observe_property(property, button_name)
-            end
-        end
-
-        -- Handle standard property references [[property-name]]
-        local properties = extract_properties(property_text)
-        if properties then
-            for _, prop_name in ipairs(properties) do
-                observe_property(prop_name, button_name)
-            end
-        end
-    end
-
-    -- Register observers for all button states
     for button_name, button in pairs(self.buttons) do
-        for _, state in pairs(button.states) do
-            -- Monitor properties in active state, badge and tooltip
-            local fields = {state.active, state.badge, state.tooltip}
-            for _, field in ipairs(fields) do
-                register_button_properties(field, button_name)
-            end
-        end
+        self.property_manager:watch_button_properties(button_name, button)
     end
 end
-
 
 
 
@@ -669,6 +617,7 @@ end
 function ButtonManager:register_default_handlers()
     -- Store initial modifier state configuration for restoration
     local initial_state_map = shallow_copy(self.modifier_state_map)
+    local initial_default = self.default_state_name
 
     -- Handler to change the default state
     mp.register_script_message('set-default', function(new_default_state)
@@ -683,50 +632,140 @@ function ButtonManager:register_default_handlers()
         
         -- Set new default and update display
         self.modifier_state_map['default'] = new_default_state
+        self.default_state_name = new_default_state
         self:show_default()
     end)
 
     -- Handler to restore original default state configuration
     mp.register_script_message('revert-default', function()
         self.modifier_state_map = shallow_copy(initial_state_map)
+        self.default_state_name = initial_default
         self:show_default()
     end)
 end
 
+--MARK: prop manager
+PropertyManager.__index = PropertyManager
 
+function PropertyManager.new(button_manager)
+    local self = setmetatable({}, PropertyManager)
+    self.observers = {}
+    self.cache = {}
+    self.watch_list = {}
+    self.button_manager = button_manager
 
+    mp.register_script_message('cycle-prop-values', function(prop, ...)
+        local values = {...}
+        local current = mp.get_property_native(prop)
+        local current_idx = table_find(values, current) or 0
+        local next_value = values[(current_idx % #values) + 1]
+        mp.set_property(prop, next_value)
+    end)
 
---MARK: BM END
+    return self
+end
 
+function PropertyManager:register_property(property_name, callback)
+    if not self.observers[property_name] then
+        self.observers[property_name] = {}
+        mp.observe_property(property_name, "string", function(_, value)
+            self.cache[property_name] = value
+            self:notify_observers(property_name, value)
+        end)
+    end
+    table.insert(self.observers[property_name], callback)
+end
 
+function PropertyManager:notify_observers(property_name, value)
+    if self.observers[property_name] then
+        for _, callback in ipairs(self.observers[property_name]) do
+            callback(value)
+        end
+    end
+end
 
+function PropertyManager:get_property(property_name)
+    if self.cache[property_name] == nil then
+        self.cache[property_name] = mp.get_property(property_name)
+    end
+    return self.cache[property_name]
+end
 
+function PropertyManager:handle_properties(field, button_name)
+    -- Handle standard properties
+    local props = self:extract_properties(field)
+    for _, prop in ipairs(props) do
+        self:register_property(prop, function()
+            self.button_manager:update_button(button_name)
+        end)
+    end
+    -- Handle placeholder properties
+    for pattern, props in pairs(placeholders) do
+        if field:find(pattern) then
+            for _, prop in ipairs(props) do
+                self:register_property(prop, function()
+                    self.button_manager:update_button(button_name)
+                end)
+            end
+        end
+    end
+end
 
+function PropertyManager:watch_button_properties(button_name, button)
+    for _, state in pairs(button.states) do
+        for _, field in ipairs({state.active, state.badge, state.tooltip}) do
+            if field then
+                self:handle_properties(field, button_name)
+            end
+        end
+    end
+end
 
+function PropertyManager:extract_properties(input_string)
+    if not input_string then return {} end
+    local properties = {}
+    for prop in input_string:gmatch("%[%[([^%]]+)%]%]") do
+        table.insert(properties, prop)
+    end
+    return properties
+end
+
+function PropertyManager:translate_button_properties(button_name, button_states)
+    for state_name, state in pairs(button_states) do
+        -- Process dynamic properties
+        local dynamic_fields = {"active", "tooltip", "badge"}
+        for _, field in ipairs(dynamic_fields) do
+            if state[field] then
+                local props = self:extract_properties(state[field])
+                if props then
+                    local processed_string, command = self:process_cycle_properties(
+                        state[field],
+                        props,
+                        state.command
+                    )
+                    state.command = command
+                    state[field] = processed_string
+                end
+            end
+        end
+    end
+    
+    options.buttons[button_name] = button_states
+    return button_states
+end
 
 --MARK: cust props
--- Process and register custom properties that use the user-data namespace
---- Processes user-data properties with cycle values and registers their handlers
---- @param input_string string The string containing property definitions
---- @param properties table|nil Optional pre-extracted properties
---- @param command_string string|nil Existing command string to append to
---- @return string, string Modified input string and command string
-local function process_cycle_properties(input_string, properties, command_string)
+function PropertyManager:process_cycle_properties(input_string, properties, command_string)
     if not input_string then return input_string, command_string end
-    
-    local props = properties or extract_properties(input_string)
-    if not props then return input_string, command_string end
     
     local result = input_string
     local commands = command_string or ""
     
-    for _, prop in ipairs(props) do
-        -- Only process user-data properties with cycle values
+    for _, prop in ipairs(properties) do
         if prop:match("^user%-data/") and prop:find("%?") then
             local property_name, cycle_values = unpack(split(prop, "?"))
             local initial_value = split(cycle_values, " ")[1]
             
-            -- Build cycle command
             commands = commands ~= "" and (commands .. ";") or ""
             commands = commands .. string.format(
                 [[script-message-to %s cycle-prop-values %s %s]], 
@@ -735,51 +774,20 @@ local function process_cycle_properties(input_string, properties, command_string
                 cycle_values
             )
             
-            -- Simplify property reference
             result = result:gsub("%[%[.-%]%]", "[[" .. property_name .. "]]")
-            
-            -- Initialize property
             mp.set_property_native(property_name, initial_value)
-            
-            -- Register cycle handler
-            mp.register_script_message('cycle-prop-values', function(prop, ...)
-                local values = {...}
-                local current = mp.get_property_native(prop)
-                local current_idx = table.find(values, current) or 0
-                local next_value = values[(current_idx % #values) + 1]
-                mp.set_property(prop, next_value)
-            end)
         end
     end
     
     return result, commands
 end
 
---- Processes dynamic properties in button state fields
---- @param state table Button state configuration
---- @return table Processed button state
-local function process_state_properties(state)
-    local dynamic_fields = {"active", "tooltip", "badge"}
-    
-    for _, field in ipairs(dynamic_fields) do
-        if state[field] then
-            local props = extract_properties(state[field])
-            if props then
-                local processed_string, command = process_cycle_properties(
-                    state[field],
-                    props,
-                    state.command
-                )
-                state.command = command
-                state[field] = processed_string
-            end
-        end
-    end
-    
-    return state
+function PropertyManager:clear_cache()
+    self.cache = {}
 end
 
---MARK: bld_buttons_tbl
+
+--MARK: parse_but_tbl
 -- Build button configuration table from options
 local function parse_buttons_table()
     if options.buttons then return end
@@ -820,7 +828,7 @@ local function parse_buttons_table()
                     end
                 end
                 
-                state = process_state_properties(state)
+                --state = process_state_properties(state)
                 states[state_name] = state
             end
         end
@@ -855,29 +863,6 @@ local function parse_cycle_map(new_states)
     options.state_cycle_map = split(options.state_cycle_map, ",")
 end
 
---MARK: inpute_event
-local function setup_input_events(manager)
-
-    for key, state_name in pairs(options.modifier_state_map) do
-        if state_name ~= 'default' then
-            local on = {
-                --press = "script-message-to " .. script_name .. " revert_inputevent", ??? why and why did this work?????
-                press   = string.format("script-message-to %s set %s", script_name, state_name),
-                release = string.format("script-message-to %s revert_inputevent", script_name)
-            }
-            mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
-        end
-    end
-    -- Register revert_inputevent message handler
-    mp.register_script_message('revert_inputevent', function()
-
-        mp.add_timeout((options.revert_delay/10) + 0.20, function()
-            manager:show_default("delay")
-            mp.set_property_number("user-data/ucm_currstate", 1)
-        end)
-    end)
-end
-
 local function parse_resolution_mappings()
     if not options.res_translation or options.res_translation == "" then
         mp.msg.error("No or faulty resolution mappings defined in options")
@@ -893,16 +878,35 @@ local function parse_resolution_mappings()
     end
 end
 
+--MARK: inpute_event
+local function setup_input_events()
 
-function setup_manager()
+    for key, state_name in pairs(options.modifier_state_map) do
+        if state_name ~= 'default' then
+            local on = {
+                --press = "script-message-to " .. script_name .. " revert_inputevent", ??? why and why did this work?????
+                press   = string.format("script-message-to %s set %s", script_name, state_name),
+                release = string.format("script-message-to %s revert_inputevent", script_name)
+            }
+            mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
+        end
+    end
+    -- Register revert_inputevent message handler
+    mp.register_script_message('revert_inputevent', function()
+        --mp.set_property_number("user-data/ucm_currstate", 0)
+        mp.add_timeout((options.revert_delay/10) + 0.20, function()
+            mp.set_property_number("user-data/ucm_currstate", 1)
+            mp.commandv('script-message-to', script_name, 'set', 'default')
+        end)
+    end)
+end
 
-    local manager = ButtonManager.new()
+
+function setup_manager(manager)
+    manager = ButtonManager.new()
     manager:init(modifier_state_map)
     manager:register_message_handlers()
     manager:register_property_observers()
-    if options.use_inputevent then
-        setup_input_events(manager) 
-    end
     manager:register_default_handlers()
     return manager
 end
@@ -912,7 +916,11 @@ parse_modifier_keys()
 parse_cycle_map()
 parse_resolution_mappings()
 parse_buttons_table()
-local manager = setup_manager()
+if options.use_inputevent then
+    setup_input_events() 
+end
+local manager = nil
+manager = setup_manager(manager)
 
 
 
@@ -992,7 +1000,7 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
     end
 end)
 
-
+--TODO: ButtonManager:initialize_button remove dependencie of propstatemap
 --TODO: current state as property?
 --TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
 --TODO: check if props are initially set. what does this mean?
