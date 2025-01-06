@@ -228,6 +228,27 @@ local function split(input_string, primary_separator, key_value_separator)
     return result
 end
 
+--- Finds the index of a value in a table
+--- @param tbl table The table to search
+--- @param value any The value to find
+--- @return number|nil Index of the value or nil if not found
+local function table_find(tbl, value)
+    for i, v in ipairs(tbl) do
+        if v == value then
+            return i
+        end
+    end
+    return nil
+end
+--MARK: shallow_copy
+function shallow_copy(t)
+    local t2 = {}
+    for k,v in pairs(t) do
+        t2[k] = v
+    end
+    return t2
+end
+
 
 --MARK: Button
 -- Button Class
@@ -380,6 +401,7 @@ function Button:replace_properties(input, active)
 
     return result or nil
 end
+--MARK: replace cmds
 function Button:replace_commands(input)
     local special_notation = {
         {
@@ -454,6 +476,7 @@ function ButtonManager.new()
     self.unique_states        = {}
     self.current_active_state = ""
     self.current_active_state_number = 1
+    self.property_observers = {}
     return self
 end
 
@@ -498,7 +521,7 @@ function ButtonManager:manage_unique_states(button_states)
     end
 end
 
-
+--MARK: init buttons
 function ButtonManager:initialize_buttons()
     for button_name, button_states in pairs(options.buttons) do
         self:initialize_button(button_name, button_states)
@@ -530,6 +553,7 @@ function ButtonManager:set_button_state(state_name)
     end
 end
 
+--MARK: show default
 function ButtonManager:show_default()
     local state_name = self.modifier_state_map['default']
     
@@ -550,7 +574,7 @@ function ButtonManager:show_default()
     self:set_button_state(state_name)
     --end
 end
-
+--MARK: reg msg handlers
 function ButtonManager:register_message_handlers()
     for state_name in pairs(self.unique_states) do
         mp.msg.debug("register_message_handlers", 'set ' .. state_name)
@@ -570,88 +594,105 @@ function ButtonManager:register_message_handlers()
     end
 end
 
+--MARK: prop_observers
 function ButtonManager:update_button(button_name)
-    --if not self.buttons[button_name].states[self.current_active_state] then
-    --    self.buttons[button_name]:update_state()
-    --end
-    --self.buttons[button_name]:update_state(self.current_active_state)
-    self.buttons[button_name]:update_state()
+    if not self.buttons[button_name] then return end
+    self.buttons[button_name]:update_state(self.current_active_state)
 end
 
---MARK: prop_observers
 function ButtonManager:register_property_observers()
-    local property_observers = {}
-
-    local function register_property_observer(property_name, button_name)
-        if not (type(property_name) == "string" and property_name ~= "") then return end
+    local function observe_property(property_name, button_name)
+        if not property_name or type(property_name) ~= "string" then return end
         
-        if not property_observers[property_name] then
-            property_observers[property_name] = {}
+        -- Create observer group if it doesn't exist
+        if not self.property_observers[property_name] then
+            self.property_observers[property_name] = {}
+            
+            -- Register the property observer
             mp.observe_property(property_name, "string", function()
-                for observed_button in pairs(property_observers[property_name]) do
-                    self:update_button(observed_button)
+                -- Update all buttons watching this property
+                for button in pairs(self.property_observers[property_name]) do
+                    self:update_button(button)
                 end
             end)
         end
-        property_observers[property_name][button_name] = true
+        
+        -- Add button to observer group
+        self.property_observers[property_name][button_name] = true
     end
 
-    local function register_dynamic_properties(property_string, button_name)
-        if not property_string then return end
-        property_string = tostring(property_string)
+    local function register_button_properties(property_text, button_name)
+        if not property_text then return end
+        
+        -- Handle special placeholders
+        local placeholders = {
+            ["%?%(f%)"] = "file-loaded",            -- Format placeholder
+            ["%?%(p%)"] = "file-loaded",            -- Resolution placeholder 
+            ["%?%(c%)"] = "user-data/ucm_currstate" -- Cycle placeholder
+        }
 
-        -- Handle special format and resolution placeholders
-        if property_string:find("%?%(f%)") or property_string:find("%?%(p%)") then
-            register_property_observer("file-loaded", button_name)
-        end
-        -- Handle special cycle placeholders
-        if property_string:find("%?%(c%)") then
-            --mp.msg.error("cycle placeholder")
-            register_property_observer("user-data/ucm_currstate", button_name)
+        for pattern, property in pairs(placeholders) do
+            if property_text:find(pattern) then
+                observe_property(property, button_name)
+            end
         end
 
-        -- Handle regular properties enclosed in [[]]
-        local extracted_properties = extract_properties(property_string) or {}
-        for _, property_name in pairs(extracted_properties) do
-            register_property_observer(property_name, button_name)
+        -- Handle standard property references [[property-name]]
+        local properties = extract_properties(property_text)
+        if properties then
+            for _, prop_name in ipairs(properties) do
+                observe_property(prop_name, button_name)
+            end
         end
     end
 
-    -- Iterate through all buttons and their states to register observers
+    -- Register observers for all button states
     for button_name, button in pairs(self.buttons) do
         for _, state in pairs(button.states) do
-            if state.active  then register_dynamic_properties(state.active,  button_name) end
-            if state.badge   then register_dynamic_properties(state.badge,   button_name) end
-            if state.tooltip then register_dynamic_properties(state.tooltip, button_name) end
+            -- Monitor properties in active state, badge and tooltip
+            local fields = {state.active, state.badge, state.tooltip}
+            for _, field in ipairs(fields) do
+                register_button_properties(field, button_name)
+            end
         end
     end
 end
+
 
 
 
 -- in case we want another state as default. For example, if we want ta have state_3 as default in fullscreen
 -- we can use the set_default script message in other scripts/auto profile
 --MARK: default_handlers
+--- Registers handlers for managing default button states and state restoration
+--- @param self ButtonManager The ButtonManager instance
 function ButtonManager:register_default_handlers()
-    mp.msg.debug("register_default_handlers", mp.utils.format_json(self.modifier_state_map))
-    local saved_modifier_state_map = shallow_copy(self.modifier_state_map)
+    -- Store initial modifier state configuration for restoration
+    local initial_state_map = shallow_copy(self.modifier_state_map)
 
+    -- Handler to change the default state
     mp.register_script_message('set-default', function(new_default_state)
-        local old_state = self.modifier_state_map['default']
+        local previous_default = self.modifier_state_map['default']
+        
+        -- Swap states to maintain mappings
         for key, state_name in pairs(self.modifier_state_map) do
             if state_name == new_default_state then
-                self.modifier_state_map[key] = old_state
+                self.modifier_state_map[key] = previous_default
             end
         end
+        
+        -- Set new default and update display
         self.modifier_state_map['default'] = new_default_state
         self:show_default()
     end)
 
+    -- Handler to restore original default state configuration
     mp.register_script_message('revert-default', function()
-        self.modifier_state_map = shallow_copy(saved_modifier_state_map)
+        self.modifier_state_map = shallow_copy(initial_state_map)
         self:show_default()
     end)
 end
+
 
 
 
@@ -665,89 +706,80 @@ end
 
 --MARK: cust props
 -- Process and register custom properties that use the user-data namespace
-local function process_custom_properties(input_string, properties, command_string)
+--- Processes user-data properties with cycle values and registers their handlers
+--- @param input_string string The string containing property definitions
+--- @param properties table|nil Optional pre-extracted properties
+--- @param command_string string|nil Existing command string to append to
+--- @return string, string Modified input string and command string
+local function process_cycle_properties(input_string, properties, command_string)
     if not input_string then return input_string, command_string end
     
-    local result_string = input_string
     local props = properties or extract_properties(input_string)
+    if not props then return input_string, command_string end
     
-    if not props then return result_string, command_string end
+    local result = input_string
+    local commands = command_string or ""
     
-    -- Process each property that matches the user-data pattern with cycle values
-    for _, item in ipairs(props) do
-        if item:match("^user%-data/") and item:find("%?") then
-            local prop, cycle_values = unpack(split(item, "?"))
-            local first_value = split(cycle_values, " ")[1]
-            --mp.msg.error("process_custom_properties", prop, first_value, cycle_values)
+    for _, prop in ipairs(props) do
+        -- Only process user-data properties with cycle values
+        if prop:match("^user%-data/") and prop:find("%?") then
+            local property_name, cycle_values = unpack(split(prop, "?"))
+            local initial_value = split(cycle_values, " ")[1]
             
-            -- Append cycle command to existing command string
-            command_string = command_string and (command_string .. ';') or ''
-            command_string = command_string .. string.format(
+            -- Build cycle command
+            commands = commands ~= "" and (commands .. ";") or ""
+            commands = commands .. string.format(
                 [[script-message-to %s cycle-prop-values %s %s]], 
                 script_name, 
-                prop, 
+                property_name, 
                 cycle_values
             )
             
-            -- Remove cycle values from property string
-            --result_string = result_string:gsub("%[%[([^%]]+)%?[^%]]*%]%]", "[[%1]]")
-            result_string = result_string:gsub("%[%[.-%]%]", "[[" .. prop .. "]]") --looks better than above
-
-
-            --mp.msg.error("result_string", result_string)
+            -- Simplify property reference
+            result = result:gsub("%[%[.-%]%]", "[[" .. property_name .. "]]")
             
-            -- Initialize property with first value
-            mp.set_property_native(prop, first_value)
-
+            -- Initialize property
+            mp.set_property_native(property_name, initial_value)
             
-            -- Register cycle handler if not already registered
-            --if not mp.get_script_message_handlers()['cycle-prop-values'] then --not needed it overwrites
-            mp.register_script_message('cycle-prop-values', function(property, ...)
+            -- Register cycle handler
+            mp.register_script_message('cycle-prop-values', function(prop, ...)
                 local values = {...}
-                local current = mp.get_property_native(property)
-                
-                -- Find current value index and cycle to next
-                local current_index = 1
-                for i, v in ipairs(values) do
-                    if v == current then
-                        current_index = i
-                        break
-                    end
-                end
-                
-                local next_index = (current_index % #values) + 1
-                mp.msg.debug("next_index", next_index,"values[next_index]", values[next_index],"current", current, "current_index", current_index)
-                mp.set_property(property, values[next_index])
+                local current = mp.get_property_native(prop)
+                local current_idx = table.find(values, current) or 0
+                local next_value = values[(current_idx % #values) + 1]
+                mp.set_property(prop, next_value)
             end)
-            --end
-        end 
+        end
     end
     
-    return result_string, command_string
+    return result, commands
 end
 
-function ensure_porper_props(state)
-    -- Process custom properties in active/tooltip/badge fields
-    for field in pairs({active = true, tooltip = true, badge = true}) do
-    --for field in ipairs({"active", "tooltip", "badge"}) do
+--- Processes dynamic properties in button state fields
+--- @param state table Button state configuration
+--- @return table Processed button state
+local function process_state_properties(state)
+    local dynamic_fields = {"active", "tooltip", "badge"}
+    
+    for _, field in ipairs(dynamic_fields) do
         if state[field] then
             local props = extract_properties(state[field])
             if props then
-                local translated_string, command = process_custom_properties(
-                    state[field], 
-                    props, 
+                local processed_string, command = process_cycle_properties(
+                    state[field],
+                    props,
                     state.command
                 )
                 state.command = command
-                state[field] = translated_string
+                state[field] = processed_string
             end
-            --mp.msg.error("ensure_porper_props", mp.utils.format_json(state))
         end
     end
-return state
+    
+    return state
 end
 
---MARK: build_buttons
+--MARK: bld_buttons_tbl
 -- Build button configuration table from options
 local function parse_buttons_table()
     if options.buttons then return end
@@ -788,25 +820,13 @@ local function parse_buttons_table()
                     end
                 end
                 
-                state = ensure_porper_props(state)
-                --mp.msg.debug("statejson: " , mp.utils.format_json(state))
-                
+                state = process_state_properties(state)
                 states[state_name] = state
             end
         end
-
         options.buttons[button_name] = states
         button_index = button_index + 1
     end
-end
-
---MARK: shallow_copy
-function shallow_copy(t)
-    local t2 = {}
-    for k,v in pairs(t) do
-        t2[k] = v
-    end
-    return t2
 end
 
 --MARK: parse_modkey
@@ -957,7 +977,7 @@ mp.register_script_message('set-button', function(...)
 
     
     for _,state in pairs(button_states) do
-        state = ensure_porper_props(state)
+        state = process_state_properties(state)
     end
     manager:initialize_button(button_name, button_states)
     manager:set_button_state(manager.current_active_state)
