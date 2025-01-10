@@ -267,6 +267,44 @@ local DEFAULT_STATE = {
     tooltip = "",
     command = string.format("script-message-to %s lable", script_name), --Do Nothing
 }
+local STATE_SCHEMA = {
+    valid_fields = {
+        icon = {"string", "nil"},
+        badge = {"string", "nil"},
+        active = {"string", "boolean", "nil"},
+        tooltip = {"string", "nil"},
+        command = {"string"}
+    }
+}
+
+function validate_button_state(state_name, state, button_name)
+    if type(state) ~= "table" then
+        mp.msg.error(string.format("Invalid state '%s' for button '%s': must be a table", state_name, button_name))
+        return false
+    end
+
+    -- Only validate fields that are present
+    for field, value in pairs(state) do
+        local valid_types = STATE_SCHEMA.valid_fields[field]
+        if valid_types then
+            local value_type = type(value)
+            local type_valid = false
+            for _, valid_type in ipairs(valid_types) do
+                if value_type == valid_type or (value == nil and valid_type == "nil") then
+                    type_valid = true
+                    break
+                end
+            end
+            if not type_valid then
+                mp.msg.error(string.format("Invalid type for field '%s' in state '%s' for button '%s': expected one of %s, got %s",
+                    field, state_name, button_name, table.concat(valid_types, ", "), value_type))
+                return false
+            end
+        end
+    end
+
+    return true
+end
 
 function Button.new(name, states)
     local self = setmetatable({}, Button)
@@ -278,16 +316,27 @@ function Button.new(name, states)
 end
 
 function Button:initialize_states(default_state_name)
+    -- Validate all states
+    for state_name, state in pairs(self.states) do
+        if not validate_button_state(state_name, state, self.name) then
+            mp.msg.warn(string.format("Using default values for invalid state '%s' in button '%s'", 
+                state_name, self.name))
+            self.states[state_name] = shallow_copy(DEFAULT_STATE)
+        end
+    end
     -- Find and initialize the Default State
     self.default_state_name = default_state_name
     self.active_state = self.states[default_state_name]
     local first_state = self.states[default_state_name]
-    if first_state then
-        -- Fill Default State with default values
-        for key, value in pairs(DEFAULT_STATE) do
-            first_state[key] = first_state[key] or value
-        end
+    if not first_state then
+        mp.msg.error(string.format("No default state defined for button '%s'", self.name))
+        return
     end
+    -- Fill Default State with default values
+    for key, value in pairs(DEFAULT_STATE) do
+        first_state[key] = first_state[key] or value
+    end
+
 
     -- Fill other states with values from the first_state (default)
     for state_name, state in pairs(self.states) do
@@ -553,7 +602,11 @@ end
 
 --MARK: set_button_state
 function ButtonManager:set_button_state(state_name)
-    mp.msg.trace("setting button state to " .. state_name)
+    mp.msg.trace("setting button state to " , state_name)
+    if state_name == nil or state_name == "" then
+        mp.msg.debug("ButtonManager:set_button_state; state_name is nil or empty")
+        return 
+    end
     self.current_active_state = state_name
 
     for _, button in pairs(self.buttons) do
@@ -911,9 +964,22 @@ end
 
 local function parse_cycle_map(new_states)
     local states_to_parse = new_states or options.state_cycle_map
-    if not states_to_parse then return end
-    if type(states_to_parse) ~= "string" then return end
-    options.state_cycle_map = split(options.state_cycle_map, ",")
+    if not states_to_parse or states_to_parse == "" then
+        options.state_cycle_map = {}
+        -- Build from modifier_keys if no states defined
+        local modifier_map = split(options.modifier_keys, ",")
+        -- Extract just the state names in order
+        for _, mapping in ipairs(modifier_map) do
+            local state = split(mapping, ":")[2]
+            if state then
+                table.insert(options.state_cycle_map, state)
+            end
+        end
+    else
+        if type(states_to_parse) ~= "string" then return end
+        options.state_cycle_map = split(options.state_cycle_map, ",")
+    end
+    options.state_cycle_map = {}
 end
 
 local function parse_resolution_mappings()
@@ -978,6 +1044,28 @@ manager = setup_manager(manager)
 
 
 --MARK: script msg
+function safe_json_parse(json_string, error_context)
+    local success, result = pcall(mp.utils.parse_json, json_string)
+    if not success then
+        mp.msg.error(error_context or "JSON parse error:", result)
+        return nil
+    end
+    if type(result) ~= "table" then
+        mp.msg.error(error_context or "Invalid data format - expected table")
+        return nil
+    end
+    return result
+end
+
+function safe_json_stringify(data, error_context)
+    local success, result = pcall(mp.utils.format_json, data)
+    if not success then
+        mp.msg.error(error_context or "JSON stringify error:", result)
+        return nil
+    end
+    return result
+end
+
 mp.register_script_message('cycle', function()
     local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
     local num_states = #options.state_cycle_map
@@ -986,6 +1074,7 @@ mp.register_script_message('cycle', function()
     mp.set_property_number("user-data/ucm_currstate", next_state)
     manager:set_button_state(options.state_cycle_map[next_state])
 end)
+
 mp.register_script_message('cycle-back', function()
     local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
     local num_states = #options.state_cycle_map
@@ -994,17 +1083,24 @@ mp.register_script_message('cycle-back', function()
     mp.set_property_number("user-data/ucm_currstate", next_state)
     manager:set_button_state(options.state_cycle_map[next_state])
 end)
+
 mp.register_script_message('extend-cycle-states', function(new_states_to_cycle)
-    if not type(new_states_to_cycle) == "string" then mp.msg.error("new_states_to_cycle must be a string") return end
+    if type(new_states_to_cycle) ~= "string" then 
+        mp.msg.error("new_states_to_cycle must be a string") 
+        return 
+    end
     local new_states = split(new_states_to_cycle, ",")
     for _, new_state in ipairs(new_states) do
         table.insert(options.state_cycle_map, new_state)
     end
 end)
+
 mp.register_script_message('get-cycle-states', function(receiver)
-    local cycle_states_json = mp.utils.format_json(options.state_cycle_map)
-    mp.commandv('script-message-to', receiver, 'receive-cycle-states', cycle_states_json)
+    local json_string = safe_json_stringify(options.state_cycle_map, "get-cycle-states failed")
+    if not json_string then return end
+    mp.commandv('script-message-to', receiver, 'receive-cycle-states', json_string)
 end)
+
 mp.register_script_message('set-cycle-states', function(new_states)
     if type(new_states) ~= "string" then
         mp.msg.error("new_states must be a string")
@@ -1014,30 +1110,34 @@ mp.register_script_message('set-cycle-states', function(new_states)
 end)
 
 mp.register_script_message('get-buttons', function(button_receiver)
-    local buttons_json = mp.utils.format_json(manager.buttons)
+    local buttons_json = safe_json_stringify(manager.buttons, "get-buttons failed")
+    if not buttons_json then return end
     mp.commandv('script-message-to', button_receiver, 'receive-buttons', buttons_json)
     return true
 end)
+
 mp.register_script_message('set-buttons', function(buttons_json)
-    local parsed_buttons = mp.utils.parse_json(buttons_json)
+    local parsed_buttons = safe_json_parse(buttons_json, "set-buttons failed")
+    if not parsed_buttons then return end
     
     local translated = {}
     for button_name, button_data in pairs(parsed_buttons) do
         translated[button_name] = button_data.states
     end
     options.buttons = translated
-    manager = setup_manager(modifier_state_map)
+    manager = setup_manager(manager)
 end)
+
 mp.register_script_message('set-button', function(...)
     local args = {...}
     local button_name = args[1]
     local states_json = table.concat(args, " ", 2)
     
-    local button_states = mp.utils.parse_json(states_json)
+    local button_states = safe_json_parse(states_json, "set-button failed")
+    if not button_states then return end
     manager:manage_unique_states(button_states)
 
-    
-    for _,state in pairs(button_states) do
+    for _, state in pairs(button_states) do
         state = process_state_properties(state)
     end
     manager:initialize_button(button_name, button_states)
@@ -1046,14 +1146,15 @@ end)
 
 mp.register_script_message('get-button', function(button_receiver, button_name)
     if manager.buttons[button_name] then
-        local button_json = mp.utils.format_json(manager.buttons[button_name].states)
+        local button_json = safe_json_stringify(manager.buttons[button_name].states, "get-button failed")
+        if not button_json then return end
         mp.commandv('script-message-to', button_receiver, 'receive-button', button_name, button_json)
     else
         mp.msg.error("Button not found", button_name)
     end
 end)
 
---TODO: ButtonManager:initialize_button remove dependencie of propstatemap
+
 --TODO: current state as property?
 --TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
 --TODO: check if props are initially set. what does this mean?
