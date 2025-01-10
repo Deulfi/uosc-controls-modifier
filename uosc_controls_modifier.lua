@@ -255,8 +255,7 @@ function shallow_copy(t)
 end
 
 
---MARK: Button
--- Button Class
+--MARK: Button Class
 local Button = {}
 Button.__index = Button
 
@@ -691,32 +690,42 @@ function PropertyManager:get_property(property_name)
     return self.cache[property_name]
 end
 
-function PropertyManager:process_state_fields(button_name, button_states, callback)
-    for _, state in pairs(button_states) do
-        for _, field in ipairs({'active', 'badge', 'tooltip'}) do
-            if state[field] then
-                callback(state, field, button_name)
-            end
-        end
+function PropertyManager:extract_properties(input_string)
+    if not input_string then return {} end
+    local properties = {}
+    for prop in input_string:gmatch("%[%[([^%]]+)%]%]") do
+        table.insert(properties, prop)
     end
+    return properties
 end
 
-function PropertyManager:handle_properties(field, button_name)
-    -- Handle standard properties
-    local props = self:extract_properties(field)
-    for _, prop in ipairs(props) do
-        self:register_property(prop, function()
-            self.button_manager:update_button(button_name)
-        end)
-    end
-    -- Handle placeholder properties
-    for pattern, props in pairs(placeholders) do
-        if field:find(pattern) then
-            for _, prop in ipairs(props) do
-                self:register_property(prop, function()
-                    self.button_manager:update_button(button_name)
-                end)
-            end
+
+
+--function PropertyManager:handle_properties(field, button_name)
+--    -- Handle standard properties
+--    local props = self:extract_properties(field)
+--    for _, prop in ipairs(props) do
+--        self:register_property(prop, function()
+--            self.button_manager:update_button(button_name)
+--        end)
+--    end
+--    -- Handle placeholder properties
+--    for pattern, props in pairs(placeholders) do
+--        if field:find(pattern) then
+--            for _, prop in ipairs(props) do
+--                self:register_property(prop, function()
+--                    self.button_manager:update_button(button_name)
+--                end)
+--            end
+--        end
+--    end
+--end
+
+function PropertyManager:process_state_fields(button_name, button_states, callback)
+    for _, state in pairs(button_states) do
+        --for _, field in ipairs({'active', 'badge', 'tooltip'}) do
+        for _, field in ipairs({state.active, state.badge, state.tooltip}) do
+            callback(state, field, button_name)
         end
     end
 end
@@ -729,34 +738,52 @@ function PropertyManager:watch_button_properties(button_name, button)
     --        end
     --    end
     --end
-    self:process_state_fields(button_name, button.states, function(field, button_name)
-        self:handle_properties(field, button_name)
+    self:process_state_fields(button_name, button.states, function(state, field, button_name)
+        -- Handle standard properties
+        local props = self:extract_properties(field)
+        for _, prop in ipairs(props) do
+            self:register_property(prop, function()
+                self.button_manager:update_button(button_name)
+            end)
+        end
+        -- Handle placeholder properties
+        for pattern, props in pairs(placeholders) do
+            if field:find(pattern) then
+                -- itterate through all properties we need for the button
+                for _, prop in ipairs(props) do
+                    self:register_property(prop, function()
+                        self.button_manager:update_button(button_name)
+                    end)
+                end
+            end
+        end
+        
     end)
 end
 
-function PropertyManager:extract_properties(input_string)
-    if not input_string then return {} end
-    local properties = {}
-    for prop in input_string:gmatch("%[%[([^%]]+)%]%]") do
-        table.insert(properties, prop)
-    end
-    return properties
-end
+
 
 function PropertyManager:translate_button_properties(button_name, button_states)
-    self:process_state_fields(button_name, button_states, function(state, field)
-        local props = self:extract_properties(state[field])
+    self:process_state_fields(button_name, button_states, function(state, field_value)
+        local props = self:extract_properties(field_value)
         if props then
             local processed_string, command = self:process_cycle_properties(
-                state[field],
+                field_value,
                 props,
                 state.command
             )
             state.command = command
-            state[field] = processed_string
+            if     field_value == state.active  then state.active  = processed_string
+            elseif field_value == state.badge   then state.badge   = processed_string
+            elseif field_value == state.tooltip then state.tooltip = processed_string
+            end
         end
     end)
+
+    options.buttons[button_name] = button_states
+    return button_states
     
+
     --for state_name, state in pairs(button_states) do
     --    -- Process dynamic properties
     --    local dynamic_fields = {"active", "tooltip", "badge"}
@@ -775,9 +802,9 @@ function PropertyManager:translate_button_properties(button_name, button_states)
     --        end
     --    end
     --end
-    --
-    options.buttons[button_name] = button_states
-    return button_states
+    
+    
+
 end
 
 --MARK: cust props
