@@ -500,6 +500,8 @@ function ButtonManager:init()
     
     self:initialize_buttons()
     self:manage_unique_states()
+    --self:register_property_observers()
+    self:register_default_handlers()
     --mp.set_property("user-data/ucm_currstate", 1)
 
 end
@@ -515,6 +517,8 @@ function ButtonManager:manage_unique_states(button_states)
             if not self.unique_states[state] then
                 mp.msg.debug("Found new state: " .. state)
                 new_states[state] = true
+                -- Register message handler for the new state
+                self:register_message_handler(state)
             end
             self.unique_states[state] = true
         end
@@ -568,17 +572,34 @@ function ButtonManager:initialize_button(button_name, button_states)
     --local button = Button.new(button_name, button_states)
     --if self.default_state_name then
         button:initialize_states(self.default_state_name or self.aprox_default())
+        self:watch_button_properties(button_name, button)
         
         -- script message to set state for one button
         mp.register_script_message('set-button-state', function(button_name,state_name)
             self.buttons[button_name]:update_state(state_name)
         end)
 
-        self.buttons[button_name] = button--
+        self.buttons[button_name] = button
     --else
     --    mp.msg.error("ButtonManager:initialize_button; No default state defined")
     --end
 end
+--MARK: register_button
+function ButtonManager:register_new_button(button_name, button_states)
+    -- Initialize the button
+    self:manage_unique_states({button_states})
+    self:initialize_button(button_name, button_states)
+    --self:watch_button_properties(button_name, self.buttons[button_name])
+
+    --self:register_message_handlers()
+    --self:update_defaults()
+    -- Set initial state using the current active state
+    --local initial_state = self.current_active_state or self.default_state_name
+    --if initial_state and initial_state ~= "" then
+    --    self:set_button_state(initial_state)
+    --end
+end
+
 
 --MARK: set_button_state
 function ButtonManager:set_button_state(state_name)
@@ -609,14 +630,19 @@ end
 --MARK: reg msg handlers
 function ButtonManager:register_message_handlers()
     for state_name in pairs(self.unique_states) do
-        mp.msg.debug("register_message_handlers", 'set ' .. state_name)
-        if state_name then
-            mp.register_script_message('set', function(state_name)
-                if state_name == 'default' then
-                    self:show_default()
-                    mp.set_property_number("user-data/ucm_currstate", 1)
-                    return
-                end
+        self:register_message_handler(state_name)
+    end
+end
+function ButtonManager:register_message_handler(state_name)
+    mp.msg.debug("register_message_handlers", 'set ' .. state_name)
+
+    if state_name then
+        mp.register_script_message('set', function(state_name)
+            if state_name == 'default' then
+                self:show_default()
+                mp.set_property_number("user-data/ucm_currstate", 1)
+                return
+            else
                 -- curent cycle index for updating (possible for cycle button badge)
                 for i, state in ipairs(options.state_cycle_map) do
                     if state == state_name then
@@ -624,10 +650,9 @@ function ButtonManager:register_message_handlers()
                         break
                     end
                 end
-
                 self:set_button_state(state_name)
-            end)
-        end
+            end
+        end)
     end
 end
 
@@ -639,8 +664,12 @@ end
 
 function ButtonManager:register_property_observers()
     for button_name, button in pairs(self.buttons) do
-        self.property_manager:watch_button_properties(button_name, button)
+        --self.property_manager:watch_button_properties(button_name, button)
+        self:watch_button_properties(button_name, button)
     end
+end
+function ButtonManager:watch_button_properties(button_name, button)
+    self.property_manager:watch_button_properties(button_name, button)
 end
 
 function ButtonManager:update_defaults()
@@ -668,6 +697,7 @@ end
 --- @param self ButtonManager The ButtonManager instance
 function ButtonManager:register_default_handlers()
     -- Store initial modifier state configuration for restoration
+    if self.default_state_name == "" or self.default_state_name == nil then return end
     local initial_state_map = shallow_copy(self.modifier_state_map)
     local initial_default = self.default_state_name
 
@@ -934,6 +964,7 @@ local function parse_state_mappings(new_state_map, new_cycle_map)
     local modifier_state_map = {}
     local cycle_states = {}
 
+
     if state_map_to_parse and state_map_to_parse ~= "" then
         local items = split(state_map_to_parse, ",")
         
@@ -956,19 +987,20 @@ local function parse_state_mappings(new_state_map, new_cycle_map)
         end
     else
         modifier_state_map = { default = "" }
-        cycle_states = { "" }
+        cycle_states = nil
     end
 
     options.modifier_state_map = modifier_state_map
 
-    if cycle_map_to_parse and cycle_map_to_parse ~= "" then
-    if type(states_to_parse) ~= "string" then return end
-        cycle_map_to_parse = split(cycle_map_to_parse, ",")
-    end
-    options.state_cycle_map = cycle_states or cycle_map_to_parse
-    
     mp.msg.debug("State mappings successfully parsed")
     mp.msg.debug("modifier_state_map:", mp.utils.to_string(options.modifier_state_map))
+
+
+    if cycle_map_to_parse ~= "" and type(cycle_map_to_parse) == "string" then 
+        cycle_map_to_parse = split(cycle_map_to_parse, ",")
+    end
+    options.state_cycle_map = cycle_states or cycle_map_to_parse or {}
+    
     mp.msg.debug("state_cycle_map:"   , mp.utils.to_string(options.state_cycle_map))
 end
 
@@ -1041,9 +1073,9 @@ end
 function setup_manager(manager)
     manager = ButtonManager.new()
     manager:init(modifier_state_map)
-    manager:register_message_handlers()
-    manager:register_property_observers()
-    manager:register_default_handlers()
+    --manager:register_message_handlers()
+    --manager:register_property_observers()
+    --manager:register_default_handlers()
     return manager
 end
 
@@ -1154,6 +1186,7 @@ mp.register_script_message('set-state-map', function(new_map)
     parse_state_mappings(new_map)
     setup_input_events()
     manager:update_defaults()
+    manager:register_default_handlers()
 end)
 
 
@@ -1193,15 +1226,19 @@ mp.register_script_message('set-button', function(...)
     local button_name = args[1]
     local states_json = table.concat(args, " ", 2)
     
+    --mp.msg.debug("set-button received for: " .. button_name)
+    --mp.msg.debug("states_json: " .. states_json)
+    
     local button_states = safe_json_parse(states_json, "set-button failed")
-    if not button_states then return end
-    manager:manage_unique_states(button_states)
-
-    for _, state in pairs(button_states) do
-        state = process_state_properties(state)
+    if not button_states then 
+        mp.msg.debug("Failed to parse button states JSON")
+        return 
     end
-    manager:initialize_button(button_name, button_states)
-    manager:set_button_state(manager.current_active_state)
+    --mp.msg.debug("Parsed button states: " .. mp.utils.format_json(button_states))
+    
+    
+    manager:register_new_button(button_name, button_states)
+
 end)
 
 mp.register_script_message('get-button', function(button_receiver, button_name)
