@@ -11,7 +11,7 @@ local options = {
   -- other order of states, if you want to cycle through them
   state_cycle_map="",
 
-  res_table = {
+  res_map_table = {
     { resolution = "1280x720", description = "HDTV" },
     { resolution = "1920x1080", description = "FHD" },
     { resolution = "2560x1440", description = "QHD" },
@@ -25,8 +25,8 @@ local options = {
     { resolution = "640x480", description = "VGA" },
     { resolution = "800x600", description = "SVGA" }
   },
+  resolution_mapping = "",
 
-  res_translation = "",
   
   -- formats that denote what format should be shown
   video_types = '3g2,3gp,asf,av1,avi,f4v,flv,h264,h265,m2ts,m4v,mkv,mov,mp4,mp4v,mpeg,mpg,ogm,ogv,rm,rmvb,ts,vob,webm,wmv,y4m',
@@ -231,6 +231,11 @@ local function has_value(tbl, value)
     end
     return false
 end
+--MARK: ##########
+
+
+
+
 
 --MARK: Button Class
 local Button = {}
@@ -373,8 +378,13 @@ function Button:update_state(state_name)
         end
     end
 end
+--MARK: ############
+
+
+
+
 --MARK: ButtonManager
--- ButtonManager Class
+--ButtonManager Class
 local ButtonManager = {}
 ButtonManager.__index = ButtonManager
 
@@ -622,7 +632,13 @@ function ButtonManager:register_default_handlers()
     end)
 end
 
---MARK: #prop manager
+--MARK: ###########
+
+
+
+
+
+--MARK: prop manager
 PropertyManager.__index = PropertyManager
 
 function PropertyManager.new(button_manager)
@@ -713,7 +729,6 @@ function PropertyManager:track_button_properties(button_name, button)
                         insert_data(prop, state_name, field_type)
                     end
                     for _, prop in ipairs(placeholder.props_passive) do
-                        mp.msg.error("Passive prop:", prop)
                         insert_data(prop, state_name, field_type, 'passive')
                     end
                 end
@@ -872,7 +887,7 @@ function PropertyManager:getVideoResolutionLabel()
     local height = self.property_map.values["video-params/h"] or ""
     local search_res = width .. "x" .. height
 
-    for _, entry in ipairs(res_table) do
+    for _, entry in ipairs(options.res_map_table) do
         if entry.resolution == search_res then
             return entry.description
         end
@@ -909,6 +924,13 @@ function PropertyManager:extract_properties(input_string)
     end
     return properties
 end
+--MARK: #############
+
+
+
+
+
+
 
 --MARK: parse_but_tbl
 -- Build button configuration table from options
@@ -1044,19 +1066,29 @@ end
 
 --MARK: parse_res_map
 local function parse_resolution_mappings()
-    if not options.res_translation or options.res_translation == "" then
-        if not options.res_table then
-            mp.msg.error("No resolution mappings defined")
-        end
+    if  options.res_translation == "" then
         return
     end
 
-    local mappings = split(options.res_translation, ",", ":")
-    for resolution, display_name in pairs(mappings) do
-        table.insert(res_table, {
-            resolution = resolution,
-            description = display_name
-        })
+    local new_mappings = split(options.resolution_mapping, ",", ":")
+    for resolution, display_name in pairs(new_mappings) do
+        local changed = false
+        for _, mappings in ipairs(options.res_map_table) do
+            if mappings.resolution == resolution then
+                mappings.description = display_name
+                changed = true
+                mp.msg.info("Updated resolution mapping for:", resolution, "to:", display_name)
+                break
+            end
+        end
+        if not changed then
+            table.insert(options.res_map_table, {
+                resolution = resolution,
+                description = display_name
+                
+            })
+            mp.msg.debug("Added resolution mapping for:", resolution, "to:", display_name)
+        end
     end
 end
 
@@ -1239,18 +1271,12 @@ mp.register_script_message('set-button', function(...)
     local args = {...}
     local button_name = args[1]
     local states_json = table.concat(args, " ", 2)
-    
-    --mp.msg.debug("set-button received for: " .. button_name)
-    --mp.msg.debug("states_json: " .. states_json)
-    
+
     local button_states = safe_json_parse(states_json, "set-button failed")
     if not button_states then 
         mp.msg.debug("Failed to parse button states JSON")
         return 
     end
-    --mp.msg.debug("Parsed button states: " .. mp.utils.format_json(button_states))
-    
-    
     manager:register_new_button(button_name, button_states)
 
 end)
@@ -1265,11 +1291,7 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
     end
 end)
 
---TODO: command hast to be translated once in init and not every time.
---todo: button do not need update on every property update eg. format button
---TODO: current state as property?
---TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
---TODO: check if props are initially set. what does this mean?
+--TODO: try to fix inbuild mpv cycle props with custom props
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --TODO: first click shows first state until nth state and a final click makes the content button invisible again.
 --TODO: would be usefull for one state contrast one state brightness etc.
