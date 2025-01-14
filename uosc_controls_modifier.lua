@@ -101,11 +101,31 @@ mp.options.read_options(options, script_name)
 local res_table = {}
 local modifier_state_map = {}
 local PropertyManager = {}
+--local placeholders = {
+--    ["%?%(f%)"] = {"file-loaded", "video-format", "video-codec-name", "audio-codec-name"},
+--    ["%?%(p%)"] = {"file-loaded", "video-params/w", "video-params/h"},
+--    ["%?%(c%)"] = {"user-data/ucm_currstate"}
+--}
 local placeholders = {
-    ["%?%(f%)"] = {"file-loaded", "video-format", "video-codec-name", "audio-codec-name"},
-    ["%?%(p%)"] = {"file-loaded", "video-params/w", "video-params/h"},
-    ["%?%(c%)"] = {"user-data/ucm_currstate"}
+    ["%?%(f%)"] = {
+        type = "format",
+        props = {"file-loaded", "path", "video-format", "video-codec-name", "audio-codec-name"},
+    },
+    ["%?%(p%)"] = {
+        type = "resolution", 
+        props = {"file-loaded", "video-params/w", "video-params/h"},
+    },
+    ["%?%(c%)"] = {
+        type = "state",
+        props = {"user-data/ucm_currstate"},
+    }
 }
+
+local placeholders_command = {
+    {pattern = "%?%(c%-%)", command = "script-message-to " .. script_name .. " cycle-back"},
+    {pattern = "%?%(c%)", command = "script-message-to " .. script_name .. " cycle"}
+}
+
 local messages = {
     already_configured = "Buttons already configured, skipping parsing",
     invalid_format = "Button %d: Invalid format - expected 'button_name, config'. Found: %s",
@@ -258,10 +278,12 @@ function validate_button_state(state_name, state, button_name)
     return true
 end
 --MARK: new
-function Button.new(name, states)
+function Button.new(name, states, property_manager)
     local self = setmetatable({}, Button)
+    self.PropertyManager = property_manager
     self.name = name
     self.states = states
+    self.states_translated = {}
     self.active_state = nil
     self.default_state_name = ""
     return self
@@ -275,10 +297,14 @@ function Button:initialize_states(default_state_name)
                 state_name, self.name))
             self.states[state_name] = shallow_copy(DEFAULT_STATE)
         end
+        -- Initialize translated states
+        self.states_translated[state_name] = shallow_copy(self.states[state_name])
     end
 
     self.default_state_name = default_state_name
-    self.active_state = self.states[self.default_state_name]
+    self.active_state = self.states_translated[self.default_state_name]
+
+    -- Fill states with defaults
     local first_state = self.states[self.default_state_name]
     if not first_state then
         print_msg("no default state", 'error', self.name)
@@ -288,7 +314,6 @@ function Button:initialize_states(default_state_name)
     for key, value in pairs(DEFAULT_STATE) do
         first_state[key] = first_state[key] or value
     end
-
 
     -- Fill other states with values from the first_state (default)
     for state_name, state in pairs(self.states) do
@@ -300,11 +325,13 @@ function Button:initialize_states(default_state_name)
             if (state[key] == nil or state[key] == "") and 
                not (key == "active" and extract_properties(fill_value)) then
                 state[key] = fill_value
+                self.states_translated[state_name][key] = fill_value
             end
         end
     end
     return self
 end
+
 function Button:update_default(default_state_name)
     if default_state_name then
         self.default_state_name = default_state_name
@@ -313,159 +340,27 @@ end
 function Button:update_default_state()
     self:update_state(self.default_state_name)
 end
-
---MARK: translate_res
-function Button.getVideoResolutionLabel()
-    local width = mp.get_property("video-params/w") or ""
-    local height = mp.get_property("video-params/h") or ""
-    local search_res = width .. "x" .. height
-
-    for _, entry in ipairs(res_table) do
-        if entry.resolution == search_res then
-            --mp.msg.debug("Found resolution: " .. entry.resolution .. " with description: " .. entry.description)
-            return entry.description
-        end
-    end
-    return height .. "p"
-end
-
---MARK: translate_format
-function Button.getMediaFormatLabel(format)
-
-    local path = mp.get_property("path")
-    local extension = path and path:match("%.([^%.]+)$")
-
-    if not path and not extension then return end
-
-    local video_types = options.video_types
-    local audio_types = options.audio_types
-    local image_types = options.image_types
-    
-    if extension and video_types:find(extension) then
-        return mp.get_property("video-format") or mp.get_property("video-codec-name")
-    elseif extension and audio_types:find(extension) then
-        return mp.get_property("audio-codec-name")
-    elseif extension and image_types:find(extension) then
-        return mp.get_property("video-format")
-    else
-        -- assume its a stream?
-        --if not extension or path:match("^https?://") then
-        if path and path:match("^%a+://") then
-
-            return mp.get_property("video-format") or 
-                   mp.get_property("video-codec-name") or 
-                   mp.get_property("video-codec") or 
-                   mp.get_property("audio-codec-name")
-        else
-            mp.msg.warn("Unknown file type for: " ,path, "or", extension)
-        end
-    end
-    return extension
-end
---MARK: replace_props
-function Button:replace_properties(input, active)
-    --mp.msg.debug("input: ", input)
-    if type(input) ~= "string" then return nil end
-    if input == "" then return nil end
-
-    local function replace_special_notation(input, pattern, replacement)
-        if input and input:match(pattern) then
-            local replacement_value = type(replacement) == "function" and replacement() or replacement
-            input = input:gsub(pattern, replacement_value)
-        end
-        return input
-    end
-
-    input = replace_special_notation(input, "%?%(p%)", Button.getVideoResolutionLabel)
-    input = replace_special_notation(input, "%?%(f%)", Button.getMediaFormatLabel)
-    --input = replace_special_notation(input, "%?%(c%)", self.manager.current_active_state_number)
-    input = replace_special_notation(input, "%?%(c%)", function() 
-        return mp.get_property_number("user-data/ucm_currstate") or 1 end)
-
-
-    local result = input
-    local props = extract_properties(input) 
-    if not props then return input end
-    
-    --mp.msg.error("props: ", mp.utils.format_json(props))
-    
-    for _, prop in ipairs(props) do
-
-        local value = mp.get_property_native(prop)
-        --mp.msg.error("prop: ", prop, " value: ", value, "result: ", result, "typweof: ", type(value))
-
-        if value == nil then return "prop not found " .. prop end
-        
-        if active and (value == "" or 
-                       value == "no" or 
-                       value == "false" or
-                       value == false or
-                       value == "0" or 
-                       value == 0) then
-            return false
-        end
-
-
-        local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
-        result = result:gsub(pattern, value)
-
-    end
-
-    return result or nil
-end
---MARK: replace cmds
-function Button:replace_commands(input)
-    local special_notation = {
-        {
-            shortcut = "%?%(c%-%)",
-            action = "script-message-to " .. script_name .. " cycle-back"
-        },
-        {
-            shortcut = "%?%(c%)",
-            action = "script-message-to " .. script_name .. " cycle"
-        }
-        -- New patterns can be added here following the same structure:
-        -- { pattern = "pattern_to_match", replacement = "command_to_execute" }
-    }
-
-    local result = tostring(input)
-    
-    for _, mapping in ipairs(special_notation) do
-        if result:match(mapping.shortcut) then
-            result = result:gsub(mapping.shortcut, mapping.action)
-        end
-    end
-
-    return result
-end
-
 --MARK: update_state
 function Button:update_state(state_name)
-
-    --for states in pairs(self.states) do
-    --    mp.msg.error("name", self.name, "state: ", states, "state_name: ", state_name)
-    --end
-
-    local state = self.states[state_name] or self.active_state
-    --mp.msg.error("name", self.name, "state: ", state, "state_name: ", state_name)
+    local state = self.states_translated[state_name] or self.active_state
     if state then
         self.active_state = state
-        --if state then state.active = (state.active == "true") end
-        --if state.active == "true" then state.active = true end
-        if state.active == "false" then state.active = false end
-        if state.badge == "nil" then state.badge = nil end
+        
+        if state.active == "" or state.active == "no" or state.active == "false" or
+                   state.active == false or state.active == "0" or state.active == 0 then 
+            state.active = false 
+        end
 
-        local tooltip = self:replace_properties(state.tooltip)
-        local badge   = self:replace_properties(state.badge)
-        local active  = self:replace_properties(state.active, true)
-        local command = self:replace_commands(state.command)
+        if state.badge == "nil" then 
+            state.badge = nil 
+        end
 
         mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
             icon    = state.icon,
-            badge   = badge,
-            active  = active,
-            tooltip = tooltip,
-            command = command,
+            badge   = state.badge,
+            active  = state.active,
+            tooltip = state.tooltip,
+            command = state.command,
         }))
     else
         if options.fill_up_states then
@@ -504,6 +399,10 @@ function ButtonManager:init()
     self:register_default_handlers()
     --mp.set_property("user-data/ucm_currstate", 1)
 
+    mp.register_script_message('update-button', function(button_name)
+        self:update_button(button_name)
+    end)
+    
 end
 --MARK: manage uniques
 function ButtonManager:manage_unique_states(button_states)
@@ -568,28 +467,24 @@ end
 
 function ButtonManager:initialize_button(button_name, button_states)
     local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
-    local button = Button.new(button_name, processed_states)
-    --local button = Button.new(button_name, button_states)
-    --if self.default_state_name then
-        button:initialize_states(self.default_state_name or self.aprox_default())
-        self:watch_button_properties(button_name, button)
-        
-        -- script message to set state for one button
-        mp.register_script_message('set-button-state', function(button_name,state_name)
-            self.buttons[button_name]:update_state(state_name)
-        end)
+    local button = Button.new(button_name, processed_states, self.property_manager)
 
-        self.buttons[button_name] = button
-    --else
-    --    mp.msg.error("ButtonManager:initialize_button; No default state defined")
-    --end
+    button:initialize_states(self.default_state_name or self.aprox_default())
+    self.property_manager:track_button_properties(button_name, button)
+    
+    -- script message to set state for one button
+    mp.register_script_message('set-button-state', function(button_name,state_name)
+        self.buttons[button_name]:update_state(state_name)
+    end)
+
+    self.buttons[button_name] = button
 end
 --MARK: register_button
 function ButtonManager:register_new_button(button_name, button_states)
     -- Initialize the button
     self:manage_unique_states({button_states})
     self:initialize_button(button_name, button_states)
-    --self:watch_button_properties(button_name, self.buttons[button_name])
+    --self:property_manager:watch_button_properties(button_name, self.buttons[button_name])
 
     --self:register_message_handlers()
     --self:update_defaults()
@@ -639,13 +534,14 @@ function ButtonManager:register_message_handler(state_name)
     if state_name then
         mp.register_script_message('set', function(state_name)
             if state_name == 'default' then
-                self:show_default()
                 mp.set_property_number("user-data/ucm_currstate", 1)
+                self:show_default()
                 return
             else
                 -- curent cycle index for updating (possible for cycle button badge)
                 for i, state in ipairs(options.state_cycle_map) do
                     if state == state_name then
+                        
                         mp.set_property_number("user-data/ucm_currstate", i)
                         break
                     end
@@ -665,12 +561,10 @@ end
 function ButtonManager:register_property_observers()
     for button_name, button in pairs(self.buttons) do
         --self.property_manager:watch_button_properties(button_name, button)
-        self:watch_button_properties(button_name, button)
+        self.property_manager:watch_button_properties(button_name, button)
     end
 end
-function ButtonManager:watch_button_properties(button_name, button)
-    self.property_manager:watch_button_properties(button_name, button)
-end
+
 
 function ButtonManager:update_defaults()
     if not options.modifier_state_map then return false end
@@ -726,16 +620,25 @@ function ButtonManager:register_default_handlers()
     end)
 end
 
---MARK: prop manager
+--MARK: #prop manager
 PropertyManager.__index = PropertyManager
 
 function PropertyManager.new(button_manager)
     local self = setmetatable({}, PropertyManager)
-    self.observers = {}
-    self.cache = {}
-    self.watch_list = {}
     self.button_manager = button_manager
+    self.property_map = {
+        standard = {},    
+        special  = {},
+        values   = {},  
+        field_types = {},   
+        buttons  = {},     
+    }
+    -- Build special properties from placeholders
+    --for _, placeholder in pairs(placeholders) do
+    --    self.property_map.special[placeholder.type] = placeholder.props
+    --end
 
+    
     mp.register_script_message('cycle-prop-values', function(prop, ...)
         local values = {...}
         local current = mp.get_property_native(prop)
@@ -744,118 +647,244 @@ function PropertyManager.new(button_manager)
         mp.set_property(prop, next_value)
     end)
 
+    mp.set_property_native("user-data/ucm_currstate", 1)
+
+    --self:setup_property_observers()
     return self
 end
 
-function PropertyManager:register_property(property_name, callback)
-    if not self.observers[property_name] then
-        self.observers[property_name] = {}
-        mp.observe_property(property_name, "string", function(_, value)
-            self.cache[property_name] = value
-            self:notify_observers(property_name, value)
-        end)
-    end
-    table.insert(self.observers[property_name], callback)
-end
+--MARK: prop_observs
+--function PropertyManager:setup_property_observers()
+--    -- Setup observers for special properties
+--    for _, props in pairs(self.property_map.special) do
+--        for _, prop in ipairs(props) do
+--            if not self.property_map.values[prop] then
+--                self:register_property(prop)
+--            end
+--        end
+--    end
+--end
+--MARK: track_btn_props
+function PropertyManager:track_button_properties(button_name, button)
 
-function PropertyManager:notify_observers(property_name, value)
-    if self.observers[property_name] then
-        for _, callback in ipairs(self.observers[property_name]) do
-            callback(value)
+    local function insert_data(prop, state_name, field_type)
+        if not self.property_map.buttons[button_name] then
+            self.property_map.buttons[button_name] = {}
         end
-    end
-end
-
-function PropertyManager:get_property(property_name)
-    if self.cache[property_name] == nil then
-        self.cache[property_name] = mp.get_property(property_name)
-    end
-    return self.cache[property_name]
-end
-
-function PropertyManager:extract_properties(input_string)
-    if not input_string then return {} end
-    local properties = {}
-    for prop in input_string:gmatch("%[%[([^%]]+)%]%]") do
-        table.insert(properties, prop)
-    end
-    return properties
-end
-
-function PropertyManager:process_state_fields(button_name, button_states, callback)
-    for _, state in pairs(button_states) do
-        --for _, field in ipairs({'active', 'badge', 'tooltip'}) do
-        for _, field in ipairs({state.active, state.badge, state.tooltip}) do
-            callback(state, field, button_name)
+        if not self.property_map.standard[prop] then
+            self.property_map.standard[prop] = {}
+            -- register an observer for the property
+            self:register_property(prop)
         end
+        table.insert(self.property_map.standard[prop], button_name)
+        table.insert(self.property_map.buttons[button_name] , {state_name = state_name, prop = prop, type = field_type})
     end
-end
 
-function PropertyManager:watch_button_properties(button_name, button)
-    self:process_state_fields(button_name, button.states, function(state, field, button_name)
-        -- Handle standard properties
-        local props = self:extract_properties(field)
-        for _, prop in ipairs(props) do
-            self:register_property(prop, function()
-                self.button_manager:update_button(button_name)
-            end)
-        end
-        -- Handle placeholder properties
-        for pattern, props in pairs(placeholders) do
-            if field:find(pattern) then
-                -- itterate through all properties we need for the button
-                for _, prop in ipairs(props) do
-                    self:register_property(prop, function()
-                        self.button_manager:update_button(button_name)
-                    end)
+    for state_name, state in pairs(button.states) do
+        for index, field in ipairs({state.active, state.badge, state.tooltip}) do
+            local field_types = {"active", "badge", "tooltip"}
+            local field_type = field_types[index]
+
+            if type(field) ~= "string" then field = tostring(field) end
+            -- Handle standard properties [[prop]]
+            for prop in field:gmatch("%[%[([^%]]+)%]%]") do
+
+                insert_data(prop, state_name, field_type)
+            end
+
+            -- Same for special notations ?(x)
+            for pattern, placeholder in pairs(placeholders) do
+                if field:match(pattern) then
+                    for _, prop in ipairs(placeholder.props) do
+                        insert_data(prop, state_name, field_type)
+                    end
                 end
             end
         end
-        
-    end)
+    end
+
+    --mp.msg.error(mp.utils.format_json(self.property_map.buttons[button_name]))
+
 end
-
-
-
-function PropertyManager:translate_button_properties(button_name, button_states)
-    self:process_state_fields(button_name, button_states, function(state, field_value)
-        local props = self:extract_properties(field_value)
-        if props then
-            local processed_string, command = self:process_cycle_properties(
-                field_value,
-                props,
-                state.command
-            )
-            state.command = command
-            if     field_value == state.active  then state.active  = processed_string
-            elseif field_value == state.badge   then state.badge   = processed_string
-            elseif field_value == state.tooltip then state.tooltip = processed_string
-            end
+--MARK: register_prop
+function PropertyManager:register_property(prop_name)
+    self.property_map.values[prop_name] = mp.get_property_native(prop_name)
+    
+    mp.observe_property(prop_name, "native", function(_, value)
+        self.property_map.values[prop_name] = value
+        
+        local affected_buttons = self.property_map.standard[prop_name] or {}
+        for _, button_name in ipairs(affected_buttons) do
+            self:update_substitution(button_name, prop_name, value)
         end
     end)
+end
+--MARK: upd_substitute
+function PropertyManager:update_substitution(button_name, prop_name, new_value)
+    if new_value == nil then 
+        mp.msg.debug("new value is nil, won't update Button")
+        return 
+    end
+    new_value = tostring(new_value)
+    local button = self.button_manager.buttons[button_name]
+        
+    for index, data in ipairs(self.property_map.buttons[button_name]) do
+        local state_name, prop_check, type = data.state_name, data.prop, data.type
+        if prop_name == prop_check then
+            --mp.msg.error(button_name,index,"state_name: " , state_name , " prop_name: " , prop_name , " field_type: " , type)
+            local state = button.states[state_name]
+            local translated = button.states_translated[state_name]
 
-    options.buttons[button_name] = button_states
+            local orig_field = state[type]
+            local tran_field = translated[type]
+            if orig_field then
+                local new_values = {}
+                -- Handle standard properties
+                local props = self:extract_properties(orig_field)
+                if props and has_value(props, prop_name) then
+                    
+                    for _, old_prop_name in ipairs(props) do
+                        local value = self.property_map.values[old_prop_name]
+                        if old_prop_name == prop_name then
+                            value = new_value
+                        end
+                        local pattern = "[[" .. old_prop_name .. "]]"
+                        pattern = pattern:gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
+                        local tbl =  {pattern = pattern, new_value = value or ""}
+                        table.insert(new_values, tbl)
+                    end
+                    
+                    --local pattern = "[[" .. prop_name .. "]]"
+                    --translated[type] = self:substitute_prop_in_field(orig_field, tran_field, pattern, new_value)
+                end
+                
+                -- Handle special notations
+                for raw_pattern, placeholder in pairs(placeholders) do
+                    if orig_field:match(raw_pattern) then
+                        --local pattern = raw_pattern:gsub("%%", "")
+                        local pattern = raw_pattern
+                        --local value = self:get_property_value(nil, placeholder.type)
+                        --TODO: put this in placeholder itself?
+                        local value = ""
+                        if placeholder.type == "format" then
+                            value = self:getMediaFormatLabel()
+                        elseif placeholder.type == "resolution" then
+                            value = self:getVideoResolutionLabel()
+                        elseif placeholder.type == "state" then
+                            value = self.property_map.values["user-data/ucm_currstate"]
+                        else
+                            value = ""
+                        end
+                        local tbl =  {pattern = pattern, new_value = value or ""}
+                        table.insert(new_values, tbl)
+                        -- TODO: check if this needs to be in loop
+                        --translated[type] = self:substitute_prop_in_field(orig_field, tran_field, pattern, value)
+                    end
+                end
+                translated[type] = self:insert_values_in_field(orig_field, new_values)
+            end
+
+
+        end
+    end
+    button:update_state(button.active_state)
+
+
+
+    --if state_name and button.states[state_name] then
+    --    local state = button.states[state_name]
+    --    local translated = button.states_translated[state_name]
+    --    
+    --    for _, field in ipairs({'active', 'badge', 'tooltip'}) do
+    --        local orig_field = state[field]
+    --        local tran_field = translated[field]
+    --        if orig_field then
+    --            -- Handle standard properties
+    --            local props = self:extract_properties(orig_field)
+    --            if props and has_value(props, prop_name) then
+    --                local pattern = "[[" .. prop_name .. "]]"
+    --                translated[field] = self:substitute_prop_in_field(orig_field, tran_field, pattern, new_value)
+    --            end
+    --            
+    --            -- Handle special notations
+    --            for raw_pattern, placeholder in pairs(placeholders) do
+    --                if orig_field:match(raw_pattern) then
+    --                    local pattern = raw_pattern:gsub("%%", "")
+    --                    --local value = self:get_property_value(nil, placeholder.type)
+    --                    --TODO: put this in placeholder itself?
+    --                    local value = ""
+    --                    if placeholder.type == "format" then
+    --                        value = self:getMediaFormatLabel()
+    --                    elseif placeholder.type == "resolution" then
+    --                        value = self:getVideoResolutionLabel()
+    --                    elseif placeholder.type == "state" then
+    --                        value = self.property_map.values["user-data/ucm_currstate"]
+    --                    else
+    --                        value = ""
+    --                    end
+    --                    -- TODO: check if this needs to be in loop
+    --                    translated[field] = self:substitute_prop_in_field(orig_field, tran_field, pattern, value)
+    --                end
+    --            end
+    --        end
+    --    end
+    --    button:update_state(button.active_state)
+    --end
+end
+function PropertyManager:insert_values_in_field(original, new_values)
+    local result = original
+    for _, new_value in ipairs(new_values) do
+        mp.msg.error("original", original, "new_value", new_value.new_value, "pattern", new_value.pattern)
+        result = string.gsub(result, new_value.pattern, new_value.new_value)
+        mp.msg.error(result)
+        --result = self:substitute_prop_in_field(result, result, new_value.pattern, new_value.new_value)
+    end
+    return result
+end
+
+--MARK: transl_btn_props
+function PropertyManager:translate_button_properties(button_name, button_states)
+    for _, state in pairs(button_states) do
+        if type(state) ~= "table" then break end
+        
+        -- Translate command placeholders
+        if state.command then
+            for _, placeholder in ipairs(placeholders_command) do
+                state.command = state.command:gsub(placeholder.pattern, placeholder.command)
+            end
+        end
+        
+        for _, field in ipairs({'active', 'badge', 'tooltip'}) do
+            if state[field] and type(state[field]) == "string" then
+                local props = self:extract_properties(state[field])
+                if props then
+                    state[field], state.command = self:process_cycle_properties(state[field], props, state.command)
+                end
+            end
+        end
+    end
     return button_states
-    
 end
 
 --MARK: cust props
-function PropertyManager:process_cycle_properties(input_string, properties, command_string)
-    if not input_string then return input_string, command_string end
-    
-    local result = input_string
-    local commands = command_string or ""
-    
+function PropertyManager:process_cycle_properties(field_as_string, properties, commands)
+
+    local result = field_as_string
+    --local commands = command_string
+
     for _, prop in ipairs(properties) do
         if prop:match("^user%-data/") and prop:find("%?") then
             local property_name, cycle_values = unpack(split(prop, "?"))
             local initial_value = split(cycle_values, " ")[1]
             
-            commands = commands ~= "" and (commands .. ";") or ""
+            --commands = commands ~= "" and (commands .. ";") or ""
+            if commands ~= "" and commands ~= "nil" then
+                commands = commands .. ";"
+            end            
             commands = commands .. string.format(
-                [[script-message-to %s cycle-prop-values %s %s]], 
-                script_name, 
-                property_name, 
+                [[script-message-to %s cycle-prop-values %s %s]],
+                script_name,
+                property_name,
                 cycle_values
             )
             
@@ -867,15 +896,102 @@ function PropertyManager:process_cycle_properties(input_string, properties, comm
     return result, commands
 end
 
-function PropertyManager:clear_cache()
-    self.cache = {}
+
+--MARK: PM_utils
+function PropertyManager:getVideoResolutionLabel()
+    local width = self.property_map.values["video-params/w"] or ""
+    local height = self.property_map.values["video-params/h"] or ""
+    local search_res = width .. "x" .. height
+
+    for _, entry in ipairs(res_table) do
+        if entry.resolution == search_res then
+            return entry.description
+        end
+    end
+    return height and height .. "p" or nil
 end
+function PropertyManager:getMediaFormatLabel()
+    local path = self.property_map.values["path"]
+    local extension = path and path:match("%.([^%.]+)$")
+
+    if not path and not extension then return "idle" end
+
+    if extension and options.video_types:find(extension) then
+        return self.property_map.values["video-format"] or self.property_map.values["video-codec-name"]
+    elseif extension and options.audio_types:find(extension) then
+        return self.property_map.values["audio-codec-name"]
+    elseif extension and options.image_types:find(extension) then
+        return self.property_map.values["video-format"]
+    else
+        if path and path:match("^%a+://") then
+            return self.property_map.values["video-format"] or 
+                   self.property_map.values["video-codec-name"] or 
+                   self.property_map.values["video-codec"] or 
+                   self.property_map.values["audio-codec-name"]
+        end
+    end
+    return extension
+end
+
+
+
+function PropertyManager:substitute_prop_in_field(original, substituted, part_to_replace, new_value)
+    new_value = tostring(new_value)
+    
+    local original_tokens = self:tokenize(original)
+    -- if there is only one token, then it's a single word, so we don't need to tokenize and can just return the new value
+    if #original_tokens == 1 then
+        return new_value
+    end
+    mp.msg.error(mp.utils.format_json(original_tokens)," ", #original_tokens)
+    local substituted_tokens = self:tokenize(substituted)
+    mp.msg.error(mp.utils.format_json(substituted_tokens))
+    local trans_index = 1
+    for i, token in ipairs(original_tokens) do 
+        local next_token = original_tokens[i+1]
+        while next_token ~= substituted_tokens[trans_index] do
+            if token == part_to_replace then
+                substituted_tokens[i] = new_value
+            end
+            trans_index = trans_index + 1
+            if trans_index > #substituted_tokens then break end
+        end
+
+    end
+    local substituted_string = table.concat(substituted_tokens, " ")
+
+    return substituted_string
+end
+function PropertyManager:tokenize(str)
+    str = tostring(str)
+    -- First mark our special patterns with spaces
+    str = str:gsub("(%[%[.-%]%])", " %1 ")
+    str = str:gsub("(%?%(.-%))", " %1 ")
+    -- Remove double spaces that might have been created
+    str = str:gsub("%s+", " ")
+    -- Trim leading/trailing spaces
+    str = str:gsub("^%s*(.-)%s*$", "%1")
+    local tbl = split(str, " ")
+    return tbl
+end
+function PropertyManager:extract_properties(input_string)
+    if not input_string then return {} end
+    local properties = {}
+    for prop in input_string:gmatch("%[%[([^%]]+)%]%]") do
+        table.insert(properties, prop)
+    end
+    return properties
+end
+--function PropertyManager:replace_property_value(input, prop, value)
+--    local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
+--    return input:gsub(pattern, tostring(value))
+--end
+
 
 
 --MARK: parse_but_tbl
 -- Build button configuration table from options
 local function parse_buttons_table()
-
 
     if options.buttons then 
         print_msg("already_configured", "info")
@@ -1073,9 +1189,6 @@ end
 function setup_manager(manager)
     manager = ButtonManager.new()
     manager:init(modifier_state_map)
-    --manager:register_message_handlers()
-    --manager:register_property_observers()
-    --manager:register_default_handlers()
     return manager
 end
 
@@ -1251,7 +1364,8 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
     end
 end)
 
-
+--TODO: command hast to be translated once in init and not every time.
+--todo: button do not need update on every property update eg. format button
 --TODO: current state as property?
 --TODO: dont check everytime for properties but create a new table for them and let handler and observer handle them?
 --TODO: check if props are initially set. what does this mean?
