@@ -116,8 +116,8 @@ local placeholders = {
     },
     ["%?%(p%)"] = {
         type = "resolution", 
-        props_active = {"video-params/w",},
-        props_passive = {"video-params/h"},
+        props_active = {"video-params/h",},
+        props_passive = {"video-params/w"},
     },
     ["%?%(c%)"] = {
         type = "state",
@@ -651,8 +651,27 @@ function PropertyManager.new(button_manager)
 
     mp.set_property_native("user-data/ucm_currstate", 1)
 
+    mp.register_event("file-loaded", function()
+        for _,button in pairs(self.buttons) do
+            for index, data in ipairs(self.property_map.buttons[button.name]) do
+                local state_name, prop, type = data.state_name, data.prop, data.type
+
+                local affected_buttons = self.property_map.standard[prop] or {}
+                for _, button_name in ipairs(affected_buttons) do
+                    local button = self.button_manager.buttons[button_name]
+                
+                        local value = self.property_map.values[prop]
+                        self:update_substitution(button_name, prop, value)
+                end
+            end
+        end
+    end)
+
     --self:setup_property_observers()
     return self
+
+
+
 end
 
 --MARK: prop_observs
