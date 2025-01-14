@@ -98,9 +98,10 @@ mp.options = require "mp.options"
 local script_name = mp.get_script_name()
 mp.options.read_options(options, script_name)
 
-local res_table = {}
-local modifier_state_map = {}
+local ButtonManager = {}
 local PropertyManager = {}
+local modifier_state_map = {}
+
 --local placeholders = {
 --    ["%?%(f%)"] = {"file-loaded", "video-format", "video-codec-name", "audio-codec-name"},
 --    ["%?%(p%)"] = {"file-loaded", "video-params/w", "video-params/h"},
@@ -244,8 +245,8 @@ Button.__index = Button
 -- Default State Template
 local DEFAULT_STATE = {
     icon = "",
-    badge = "nil",
-    active = "false",
+    badge = nil,
+    active = false,
     tooltip = "",
     command = string.format("script-message-to %s lable", script_name), --Do Nothing
 }
@@ -307,8 +308,7 @@ function Button:initialize_states(default_state_name)
                 state_name, self.name))
             self.states[state_name] = shallow_copy(DEFAULT_STATE)
         end
-        -- Initialize translated states
-        self.states_translated[state_name] = shallow_copy(self.states[state_name])
+
     end
 
     self.default_state_name = default_state_name
@@ -335,9 +335,12 @@ function Button:initialize_states(default_state_name)
             if (state[key] == nil or state[key] == "") and 
                not (key == "active" and extract_properties(fill_value)) then
                 state[key] = fill_value
-                self.states_translated[state_name][key] = fill_value
+
             end
         end
+
+        -- Initialize translated states
+        self.states_translated[state_name] = shallow_copy(self.states[state_name])
     end
     return self
 end
@@ -353,30 +356,35 @@ end
 --MARK: update_state
 function Button:update_state(state_name)
     local state = self.states_translated[state_name] or self.active_state
-    if state then
-        self.active_state = state
-        
-        if state.active == "" or state.active == "no" or state.active == "false" or
-                   state.active == false or state.active == "0" or state.active == 0 then 
-            state.active = false 
-        end
-
-        if state.badge == "nil" then 
-            state.badge = nil 
-        end
-
-        mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
-            icon    = state.icon,
-            badge   = state.badge,
-            active  = state.active,
-            tooltip = state.tooltip,
-            command = state.command,
-        }))
-    else
+    if not state then
         if options.fill_up_states then
             mp.msg.warn("Unknown state:",state, "name:", state_name, "button:", self.name)
         end
+        return
     end
+
+    self.active_state = state
+    
+    if  state.active == "" or 
+        state.active == "no" or 
+        state.active == "false" or
+        state.active == false or 
+        state.active == "0" or 
+        state.active == 0 
+        then 
+        state.active = false 
+    end
+
+    if state.badge   == "nil" then state.badge   = nil end
+    if state.tooltip == "nil" then state.tooltip = nil end
+
+    mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
+        icon    = state.icon,
+        badge   = state.badge,
+        active  = state.active,
+        tooltip = state.tooltip,
+        command = state.command,
+    }))
 end
 --MARK: ############
 
@@ -385,7 +393,7 @@ end
 
 --MARK: ButtonManager
 --ButtonManager Class
-local ButtonManager = {}
+
 ButtonManager.__index = ButtonManager
 
 function ButtonManager.new()
@@ -639,6 +647,7 @@ end
 
 
 --MARK: prop manager
+
 PropertyManager.__index = PropertyManager
 
 function PropertyManager.new(button_manager)
@@ -1066,9 +1075,7 @@ end
 
 --MARK: parse_res_map
 local function parse_resolution_mappings()
-    if  options.res_translation == "" then
-        return
-    end
+    if options.res_translation == "" then return end
 
     local new_mappings = split(options.resolution_mapping, ",", ":")
     for resolution, display_name in pairs(new_mappings) do
@@ -1104,21 +1111,22 @@ local function setup_input_events()
         -- used for debugging
         local is_mouse = key:find("^MBTN_") and true or false
 
-        if state_name ~= 'default' and not key:find("^key_%d+$") then
-            local on = {
-                press = string.format("script-message-to %s set %s", script_name, state_name),
-                release = string.format("script-message-to %s revert_inputevent %s", script_name, is_mouse),
-                ["repeat"] = string.format("script-message-to %s cancel_revert", script_name)
-            }
-  
-            
-            local success = mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
+        if state_name == 'default' or key:find("^key_%d+$") then return end
 
-            if not success then
-                mp.msg.info("Binding key with inputevent failed, inputevent will not be used")
-                return
-            end
+        local on = {
+            press      = string.format("script-message-to %s set %s",               script_name, state_name),
+            release    = string.format("script-message-to %s revert_inputevent %s", script_name, is_mouse),
+            ["repeat"] = string.format("script-message-to %s cancel_revert",        script_name)
+        }
+
+        
+        local success = mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
+
+        if not success then
+            mp.msg.info("Binding key with inputevent failed, inputevent will not be used")
+            return
         end
+        
     end
     local revert_timer = nil
     -- Cancel existing timer if it exists
@@ -1139,7 +1147,7 @@ local function setup_input_events()
 end
 
 
-function setup_manager(manager)
+function setup_managers(manager)
     manager = ButtonManager.new()
     manager:init(modifier_state_map)
     return manager
@@ -1152,13 +1160,13 @@ parse_buttons_table()
 setup_input_events() 
 
 local manager = nil
-manager = setup_manager(manager)
+manager = setup_managers(manager)
 
 
 
 
 --MARK: script msg
-function safe_json_parse(json_string, error_context)
+local function safe_json_parse(json_string, error_context)
     local success, result = pcall(mp.utils.parse_json, json_string)
     if not success then
         mp.msg.error(error_context or "JSON parse error:", result)
@@ -1171,7 +1179,7 @@ function safe_json_parse(json_string, error_context)
     return result
 end
 
-function safe_json_stringify(data, error_context)
+local function safe_json_stringify(data, error_context)
     local success, result = pcall(mp.utils.format_json, data)
     if not success then
         mp.msg.error(error_context or "JSON stringify error:", result)
@@ -1187,6 +1195,7 @@ mp.register_script_message('cycle', function()
     
     mp.set_property_number("user-data/ucm_currstate", next_state)
     manager:set_button_state(options.state_cycle_map[next_state])
+    return true
 end)
 
 mp.register_script_message('cycle-back', function()
@@ -1196,6 +1205,7 @@ mp.register_script_message('cycle-back', function()
     
     mp.set_property_number("user-data/ucm_currstate", next_state)
     manager:set_button_state(options.state_cycle_map[next_state])
+    return true
 end)
 
 mp.register_script_message('extend-cycle-state', function(new_states_to_cycle)
@@ -1207,12 +1217,14 @@ mp.register_script_message('extend-cycle-state', function(new_states_to_cycle)
     for _, new_state in ipairs(new_states) do
         table.insert(options.state_cycle_map, new_state)
     end
+    return true
 end)
 
 mp.register_script_message('get-cycle-states', function(receiver)
     local json_string = safe_json_stringify(options.state_cycle_map, "get-cycle-states failed")
     if not json_string then return end
     mp.commandv('script-message-to', receiver, 'receive-cycle-states', json_string)
+    return true
 end)
 
 mp.register_script_message('set-cycle-states', function(new_states)
@@ -1221,11 +1233,13 @@ mp.register_script_message('set-cycle-states', function(new_states)
         return
     end
     options.state_cycle_map = split(new_states, ",")
+    return true
 end)
 
 mp.register_script_message('get-state-map', function(receiver)
     local state_map_string = table.concat(options.state_cycle_map, ", ")
     mp.commandv('script-message-to', receiver, 'receive-state-map', state_map_string)
+    return true
 end)
 mp.register_script_message('set-state-map', function(new_map)
     if type(new_map) ~= "string" then
@@ -1237,6 +1251,7 @@ mp.register_script_message('set-state-map', function(new_map)
     setup_input_events()
     manager:update_defaults()
     manager:register_default_handlers()
+    return true
 end)
 mp.register_script_message('get-buttons', function(button_receiver)
     local buttons_json = safe_json_stringify(manager.buttons, "get-buttons failed")
@@ -1263,7 +1278,8 @@ mp.register_script_message('set-buttons', function(buttons_json)
         translated[button_name] = button_data.states
     end
     options.buttons = get_table_length(translated) > 0 and translated or parsed_buttons
-    manager = setup_manager(manager)
+    manager = setup_managers(manager)
+    return true
 end)
 
 
@@ -1278,7 +1294,7 @@ mp.register_script_message('set-button', function(...)
         return 
     end
     manager:register_new_button(button_name, button_states)
-
+    return true
 end)
 
 mp.register_script_message('get-button', function(button_receiver, button_name)
@@ -1289,8 +1305,10 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
     else
         mp.msg.error("Button not found", button_name)
     end
+    return true
 end)
 
+--TODO: rename modifier state map to state map
 --TODO: try to fix inbuild mpv cycle props with custom props
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --TODO: first click shows first state until nth state and a final click makes the content button invisible again.
