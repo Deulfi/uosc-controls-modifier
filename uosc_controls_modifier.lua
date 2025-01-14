@@ -110,14 +110,14 @@ local placeholders = {
     ["%?%(f%)"] = {
         type = "format",
         -- active props update the button on property change "file-loaded",
-        props_active = {"video-codec-name","video-format", "audio-codec-name"},
+        props_active = {},
         -- passive props only update the value on property change
-        props_passive = {"path",},
+        props_passive = {"path","video-codec-name","video-format", "audio-codec-name"},
     },
     ["%?%(p%)"] = {
         type = "resolution", 
-        props_active = {"video-params/h",},
-        props_passive = {"video-params/w"},
+        props_active = {},
+        props_passive = {"video-params/h","video-params/w"},
     },
     ["%?%(c%)"] = {
         type = "state",
@@ -652,39 +652,30 @@ function PropertyManager.new(button_manager)
     mp.set_property_native("user-data/ucm_currstate", 1)
 
     mp.register_event("file-loaded", function()
-        for _,button in pairs(self.buttons) do
-            for index, data in ipairs(self.property_map.buttons[button.name]) do
-                local state_name, prop, type = data.state_name, data.prop, data.type
-
-                local affected_buttons = self.property_map.standard[prop] or {}
-                for _, button_name in ipairs(affected_buttons) do
-                    local button = self.button_manager.buttons[button_name]
-                
-                        local value = self.property_map.values[prop]
-                        self:update_substitution(button_name, prop, value)
-                end
-            end
-        end
+    --small timeout to make sure all properties are initialized by MPV
+    -- without this timeout, this function would have run its course before
+    -- the property observers even acted
+        mp.add_timeout(0.1, function()
+            self:refresh_subs()
+        end)
     end)
 
-    --self:setup_property_observers()
     return self
 
 
 
 end
 
---MARK: prop_observs
---function PropertyManager:setup_property_observers()
---    -- Setup observers for special properties
---    for _, props in pairs(self.property_map.special) do
---        for _, prop in ipairs(props) do
---            if not self.property_map.values[prop] then
---                self:register_property(prop)
---            end
---        end
---    end
---end
+function PropertyManager:refresh_subs()
+    for button_name, data in pairs(self.property_map.buttons) do
+        for _, data in ipairs(data) do
+            local state_name, prop, type = data.state_name, data.prop, data.type
+            local value = self.property_map.values[prop]
+            self:update_substitution(button_name, prop, value)
+        end
+    end
+
+end
 --MARK: track_btn_props
 function PropertyManager:track_button_properties(button_name, button)
 
@@ -739,6 +730,7 @@ function PropertyManager:register_property(prop_name)
     self.property_map.values[prop_name] = mp.get_property_native(prop_name)
     
     mp.observe_property(prop_name, "native", function(_, value)
+        --mp.msg.debug("observer called for:", prop_name)
         self.property_map.values[prop_name] = value
         
         local affected_buttons = self.property_map.standard[prop_name] or {}
@@ -772,9 +764,9 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
                     
                     for _, old_prop_name in ipairs(props) do
                         local value = self.property_map.values[old_prop_name]
-                        if old_prop_name == prop_name then
-                            value = new_value
-                        end
+                        --if old_prop_name == prop_name then
+                        --    value = new_value
+                        --end
                         local pattern = "[[" .. old_prop_name .. "]]"
                         --escape special chars
                         pattern = pattern:gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
@@ -1132,6 +1124,7 @@ manager = setup_manager(manager)
 
 
 
+
 --MARK: script msg
 function safe_json_parse(json_string, error_context)
     local success, result = pcall(mp.utils.parse_json, json_string)
@@ -1173,9 +1166,9 @@ mp.register_script_message('cycle-back', function()
     manager:set_button_state(options.state_cycle_map[next_state])
 end)
 
-mp.register_script_message('extend-cycle-states', function(new_states_to_cycle)
+mp.register_script_message('extend-cycle-state', function(new_states_to_cycle)
     if type(new_states_to_cycle) ~= "string" then 
-        mp.msg.error("new_states_to_cycle must be a string") 
+        mp.msg.error("new_state_to_cycle must be a string") 
         return 
     end
     local new_states = split(new_states_to_cycle, ",")
@@ -1195,51 +1188,30 @@ mp.register_script_message('set-cycle-states', function(new_states)
         mp.msg.error("new_states must be a string")
         return
     end
-    --parse_cycle_map(new_states)
-    mp.msg.error("set-cycle-states not implemented")
+    options.state_cycle_map = split(new_states, ",")
 end)
 
 mp.register_script_message('get-state-map', function(receiver)
     local state_map_string = table.concat(options.state_cycle_map, ", ")
     mp.commandv('script-message-to', receiver, 'receive-state-map', state_map_string)
 end)
---mp.register_script_message('set-state-map', function(new_map)
---    if type(new_map) ~= "string" then
---        mp.msg.error("new state_map must be a string")
---        return
---    end
---    
---    print_msg("new state_map received", 'debug')
---    
---    parse_state_map(new_map)
---    parse_cycle_map()
---
---    
---    setup_input_events()
---    manager:update_defaults()
---end)
 mp.register_script_message('set-state-map', function(new_map)
     if type(new_map) ~= "string" then
         mp.msg.error("new state_map must be a string")
         return
     end
-    
     print_msg("new state_map received", 'debug')
     parse_state_mappings(new_map)
     setup_input_events()
     manager:update_defaults()
     manager:register_default_handlers()
 end)
-
-
-
 mp.register_script_message('get-buttons', function(button_receiver)
     local buttons_json = safe_json_stringify(manager.buttons, "get-buttons failed")
     if not buttons_json then return end
     mp.commandv('script-message-to', button_receiver, 'receive-buttons', buttons_json)
     return true
 end)
-
 mp.register_script_message('set-buttons', function(buttons_json)
     -- Check for default state in original JSON before parsing
     if not manager.default_state_name or manager.default_state_name == "" then
