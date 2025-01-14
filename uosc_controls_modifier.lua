@@ -109,15 +109,20 @@ local PropertyManager = {}
 local placeholders = {
     ["%?%(f%)"] = {
         type = "format",
-        props = {"file-loaded", "path", "video-format", "video-codec-name", "audio-codec-name"},
+        -- active props update the button on property change "file-loaded",
+        props_active = {"video-codec-name","video-format", "audio-codec-name"},
+        -- passive props only update the value on property change
+        props_passive = {"path",},
     },
     ["%?%(p%)"] = {
         type = "resolution", 
-        props = {"file-loaded", "video-params/w", "video-params/h"},
+        props_active = {"video-params/w",},
+        props_passive = {"video-params/h"},
     },
     ["%?%(c%)"] = {
         type = "state",
-        props = {"user-data/ucm_currstate"},
+        props_active = {"user-data/ucm_currstate"},
+        props_passive = {},
     }
 }
 
@@ -551,20 +556,17 @@ function ButtonManager:register_message_handler(state_name)
         end)
     end
 end
-
---MARK: prop_observers
 function ButtonManager:update_button(button_name)
     if not self.buttons[button_name] then return end
     self.buttons[button_name]:update_state(self.current_active_state)
 end
 
-function ButtonManager:register_property_observers()
-    for button_name, button in pairs(self.buttons) do
-        --self.property_manager:watch_button_properties(button_name, button)
-        self.property_manager:watch_button_properties(button_name, button)
-    end
-end
-
+--function ButtonManager:register_property_observers()
+--    for button_name, button in pairs(self.buttons) do
+--        --self.property_manager:watch_button_properties(button_name, button)
+--        self.property_manager:watch_button_properties(button_name, button)
+--    end
+--end
 
 function ButtonManager:update_defaults()
     if not options.modifier_state_map then return false end
@@ -667,7 +669,7 @@ end
 --MARK: track_btn_props
 function PropertyManager:track_button_properties(button_name, button)
 
-    local function insert_data(prop, state_name, field_type)
+    local function insert_data(prop, state_name, field_type, passive)
         if not self.property_map.buttons[button_name] then
             self.property_map.buttons[button_name] = {}
         end
@@ -676,7 +678,9 @@ function PropertyManager:track_button_properties(button_name, button)
             -- register an observer for the property
             self:register_property(prop)
         end
-        table.insert(self.property_map.standard[prop], button_name)
+        if not passive then
+            table.insert(self.property_map.standard[prop], button_name)
+        end
         table.insert(self.property_map.buttons[button_name] , {state_name = state_name, prop = prop, type = field_type})
     end
 
@@ -695,8 +699,12 @@ function PropertyManager:track_button_properties(button_name, button)
             -- Same for special notations ?(x)
             for pattern, placeholder in pairs(placeholders) do
                 if field:match(pattern) then
-                    for _, prop in ipairs(placeholder.props) do
+                    for _, prop in ipairs(placeholder.props_active) do
                         insert_data(prop, state_name, field_type)
+                    end
+                    for _, prop in ipairs(placeholder.props_passive) do
+                        mp.msg.error("Passive prop:", prop)
+                        insert_data(prop, state_name, field_type, 'passive')
                     end
                 end
             end
@@ -708,6 +716,7 @@ function PropertyManager:track_button_properties(button_name, button)
 end
 --MARK: register_prop
 function PropertyManager:register_property(prop_name)
+    -- initial value
     self.property_map.values[prop_name] = mp.get_property_native(prop_name)
     
     mp.observe_property(prop_name, "native", function(_, value)
@@ -748,6 +757,7 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
                             value = new_value
                         end
                         local pattern = "[[" .. old_prop_name .. "]]"
+                        --escape special chars
                         pattern = pattern:gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
                         local tbl =  {pattern = pattern, new_value = value or ""}
                         table.insert(new_values, tbl)
