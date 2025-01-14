@@ -721,17 +721,16 @@ function PropertyManager:register_property(prop_name)
 end
 --MARK: upd_substitute
 function PropertyManager:update_substitution(button_name, prop_name, new_value)
-    if new_value == nil then 
-        mp.msg.debug("new value is nil, won't update Button")
-        return 
-    end
+    --if new_value == nil then 
+    --    mp.msg.debug("new value is nil, won't update Button")
+    --    return 
+    --end
     new_value = tostring(new_value)
     local button = self.button_manager.buttons[button_name]
         
     for index, data in ipairs(self.property_map.buttons[button_name]) do
         local state_name, prop_check, type = data.state_name, data.prop, data.type
         if prop_name == prop_check then
-            --mp.msg.error(button_name,index,"state_name: " , state_name , " prop_name: " , prop_name , " field_type: " , type)
             local state = button.states[state_name]
             local translated = button.states_translated[state_name]
 
@@ -753,17 +752,12 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
                         local tbl =  {pattern = pattern, new_value = value or ""}
                         table.insert(new_values, tbl)
                     end
-                    
-                    --local pattern = "[[" .. prop_name .. "]]"
-                    --translated[type] = self:substitute_prop_in_field(orig_field, tran_field, pattern, new_value)
                 end
                 
                 -- Handle special notations
                 for raw_pattern, placeholder in pairs(placeholders) do
                     if orig_field:match(raw_pattern) then
-                        --local pattern = raw_pattern:gsub("%%", "")
                         local pattern = raw_pattern
-                        --local value = self:get_property_value(nil, placeholder.type)
                         --TODO: put this in placeholder itself?
                         local value = ""
                         if placeholder.type == "format" then
@@ -777,8 +771,6 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
                         end
                         local tbl =  {pattern = pattern, new_value = value or ""}
                         table.insert(new_values, tbl)
-                        -- TODO: check if this needs to be in loop
-                        --translated[type] = self:substitute_prop_in_field(orig_field, tran_field, pattern, value)
                     end
                 end
                 translated[type] = self:insert_values_in_field(orig_field, new_values)
@@ -789,55 +781,11 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
     end
     button:update_state(button.active_state)
 
-
-
-    --if state_name and button.states[state_name] then
-    --    local state = button.states[state_name]
-    --    local translated = button.states_translated[state_name]
-    --    
-    --    for _, field in ipairs({'active', 'badge', 'tooltip'}) do
-    --        local orig_field = state[field]
-    --        local tran_field = translated[field]
-    --        if orig_field then
-    --            -- Handle standard properties
-    --            local props = self:extract_properties(orig_field)
-    --            if props and has_value(props, prop_name) then
-    --                local pattern = "[[" .. prop_name .. "]]"
-    --                translated[field] = self:substitute_prop_in_field(orig_field, tran_field, pattern, new_value)
-    --            end
-    --            
-    --            -- Handle special notations
-    --            for raw_pattern, placeholder in pairs(placeholders) do
-    --                if orig_field:match(raw_pattern) then
-    --                    local pattern = raw_pattern:gsub("%%", "")
-    --                    --local value = self:get_property_value(nil, placeholder.type)
-    --                    --TODO: put this in placeholder itself?
-    --                    local value = ""
-    --                    if placeholder.type == "format" then
-    --                        value = self:getMediaFormatLabel()
-    --                    elseif placeholder.type == "resolution" then
-    --                        value = self:getVideoResolutionLabel()
-    --                    elseif placeholder.type == "state" then
-    --                        value = self.property_map.values["user-data/ucm_currstate"]
-    --                    else
-    --                        value = ""
-    --                    end
-    --                    -- TODO: check if this needs to be in loop
-    --                    translated[field] = self:substitute_prop_in_field(orig_field, tran_field, pattern, value)
-    --                end
-    --            end
-    --        end
-    --    end
-    --    button:update_state(button.active_state)
-    --end
 end
 function PropertyManager:insert_values_in_field(original, new_values)
     local result = original
     for _, new_value in ipairs(new_values) do
-        mp.msg.error("original", original, "new_value", new_value.new_value, "pattern", new_value.pattern)
         result = string.gsub(result, new_value.pattern, new_value.new_value)
-        mp.msg.error(result)
-        --result = self:substitute_prop_in_field(result, result, new_value.pattern, new_value.new_value)
     end
     return result
 end
@@ -932,48 +880,6 @@ function PropertyManager:getMediaFormatLabel()
     end
     return extension
 end
-
-
-
-function PropertyManager:substitute_prop_in_field(original, substituted, part_to_replace, new_value)
-    new_value = tostring(new_value)
-    
-    local original_tokens = self:tokenize(original)
-    -- if there is only one token, then it's a single word, so we don't need to tokenize and can just return the new value
-    if #original_tokens == 1 then
-        return new_value
-    end
-    mp.msg.error(mp.utils.format_json(original_tokens)," ", #original_tokens)
-    local substituted_tokens = self:tokenize(substituted)
-    mp.msg.error(mp.utils.format_json(substituted_tokens))
-    local trans_index = 1
-    for i, token in ipairs(original_tokens) do 
-        local next_token = original_tokens[i+1]
-        while next_token ~= substituted_tokens[trans_index] do
-            if token == part_to_replace then
-                substituted_tokens[i] = new_value
-            end
-            trans_index = trans_index + 1
-            if trans_index > #substituted_tokens then break end
-        end
-
-    end
-    local substituted_string = table.concat(substituted_tokens, " ")
-
-    return substituted_string
-end
-function PropertyManager:tokenize(str)
-    str = tostring(str)
-    -- First mark our special patterns with spaces
-    str = str:gsub("(%[%[.-%]%])", " %1 ")
-    str = str:gsub("(%?%(.-%))", " %1 ")
-    -- Remove double spaces that might have been created
-    str = str:gsub("%s+", " ")
-    -- Trim leading/trailing spaces
-    str = str:gsub("^%s*(.-)%s*$", "%1")
-    local tbl = split(str, " ")
-    return tbl
-end
 function PropertyManager:extract_properties(input_string)
     if not input_string then return {} end
     local properties = {}
@@ -982,12 +888,6 @@ function PropertyManager:extract_properties(input_string)
     end
     return properties
 end
---function PropertyManager:replace_property_value(input, prop, value)
---    local pattern = "%[%[" .. prop:gsub("[%.%[%]%(%)%%%+%-%*%?%^%$]", "%%%1") .. "%]%]"
---    return input:gsub(pattern, tostring(value))
---end
-
-
 
 --MARK: parse_but_tbl
 -- Build button configuration table from options
