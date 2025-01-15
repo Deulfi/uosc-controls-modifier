@@ -114,16 +114,19 @@ local placeholders = {
         props_active = {},
         -- passive props only update the value on property change
         props_passive = {"path","video-codec-name","video-format", "audio-codec-name"},
+        fun = function(self) return self:getMediaFormatLabel() end,
     },
     ["%?%(p%)"] = {
         type = "resolution", 
         props_active = {},
         props_passive = {"video-params/h","video-params/w"},
+        fun = function(self) return self:getVideoResolutionLabel() end,
     },
     ["%?%(c%)"] = {
         type = "state",
         props_active = {"user-data/ucm_currstate"},
         props_passive = {},
+        fun = function(self) return self.property_map.values["user-data/ucm_currstate"] end,
     }
 }
 
@@ -372,7 +375,7 @@ function Button:update_state(state_name)
         state.active == "0" or 
         state.active == 0 
         then 
-        state.active = false 
+            state.active = false 
     end
 
     if state.badge   == "nil" then state.badge   = nil end
@@ -696,7 +699,7 @@ function PropertyManager:refresh_subs()
         for _, data in ipairs(data) do
             local state_name, prop, type = data.state_name, data.prop, data.type
             local value = self.property_map.values[prop]
-            self:update_substitution(button_name, prop, value)
+            self:update_substitution(button_name, prop)
         end
     end
 
@@ -726,8 +729,8 @@ function PropertyManager:track_button_properties(button_name, button)
 
             if type(field) ~= "string" then field = tostring(field) end
             -- Handle standard properties [[prop]]
+            --for _,prop in ipairs(self:extract_properties(field)) do
             for prop in field:gmatch("%[%[([^%]]+)%]%]") do
-
                 insert_data(prop, state_name, field_type)
             end
 
@@ -750,11 +753,11 @@ function PropertyManager:track_button_properties(button_name, button)
 end
 --MARK: register_prop
 function PropertyManager:register_property(prop_name)
-    -- initial value
+    -- set initial value
     self.property_map.values[prop_name] = mp.get_property_native(prop_name)
     
     mp.observe_property(prop_name, "native", function(_, value)
-        --mp.msg.debug("observer called for:", prop_name)
+        --mp.msg.debug("observer called for:", prop_name, "value:", value, "type:", type(value))
         self.property_map.values[prop_name] = value
         
         local affected_buttons = self.property_map.standard[prop_name] or {}
@@ -764,38 +767,37 @@ function PropertyManager:register_property(prop_name)
     end)
 end
 --MARK: upd_substitute
-function PropertyManager:update_substitution(button_name, prop_name, new_value)
+function PropertyManager:update_substitution(button_name, caller)
     --if new_value == nil then 
     --    mp.msg.debug("new value is nil, won't update Button")
     --    return 
     --end
-    new_value = tostring(new_value)
+    --new_value = tostring(new_value)
     local button = self.button_manager.buttons[button_name]
         
     for index, data in ipairs(self.property_map.buttons[button_name]) do
-        local state_name, prop_check, type = data.state_name, data.prop, data.type
-        if prop_name == prop_check then
+        -- field_types active, badge, tooltip
+        local state_name, prop_name, field_type = data.state_name, data.prop, data.type
+        if caller == prop_name then
             local state = button.states[state_name]
             local translated = button.states_translated[state_name]
 
-            local orig_field = state[type]
-            local tran_field = translated[type]
+            local orig_field = state[field_type]
+            local tran_field = translated[field_type]
             if orig_field then
                 local new_values = {}
                 -- Handle standard properties
                 local props = self:extract_properties(orig_field)
+                -- is the prop we want to update really in the field we look at?
                 if props and has_value(props, prop_name) then
-                    
                     for _, old_prop_name in ipairs(props) do
-                        local value = self.property_map.values[old_prop_name]
-                        --if old_prop_name == prop_name then
-                        --    value = new_value
-                        --end
-                        local pattern = "[[" .. old_prop_name .. "]]"
-                        --escape special chars
-                        pattern = pattern:gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
-                        local tbl =  {pattern = pattern, new_value = value or ""}
-                        table.insert(new_values, tbl)
+                        -- get the chached value of the prop (we saved this value in the observer directly)
+                        local value = self.property_map.values[old_prop_name] or ""
+
+                        -- recreate how the prop should look like + escape special chars
+                        local pattern = ("[[" .. old_prop_name .. "]]"):gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
+
+                        table.insert(new_values, {pattern = pattern, new_value = value})
                     end
                 end
                 
@@ -803,29 +805,16 @@ function PropertyManager:update_substitution(button_name, prop_name, new_value)
                 for raw_pattern, placeholder in pairs(placeholders) do
                     if orig_field:match(raw_pattern) then
                         local pattern = raw_pattern
-                        --TODO: put this in placeholder itself?
-                        local value = ""
-                        if placeholder.type == "format" then
-                            value = self:getMediaFormatLabel()
-                        elseif placeholder.type == "resolution" then
-                            value = self:getVideoResolutionLabel()
-                        elseif placeholder.type == "state" then
-                            value = self.property_map.values["user-data/ucm_currstate"]
-                        else
-                            value = ""
-                        end
-                        local tbl =  {pattern = pattern, new_value = value or ""}
-                        table.insert(new_values, tbl)
+                        local value = placeholder.fun(self) or ""
+
+                        table.insert(new_values, {pattern = pattern, new_value = value})
                     end
                 end
-                translated[type] = self:insert_values_in_field(orig_field, new_values)
+                translated[field_type] = self:insert_values_in_field(orig_field, new_values)
             end
-
-
         end
     end
     button:update_state(button.active_state)
-
 end
 function PropertyManager:insert_values_in_field(original, new_values)
     local result = original
@@ -880,7 +869,7 @@ function PropertyManager:process_cycle_properties(field_as_string, properties, c
                 property_name,
                 cycle_values
             )
-            
+ 
             result = result:gsub("%[%[.-%]%]", "[[" .. property_name .. "]]")
             mp.set_property_native(property_name, initial_value)
         end
@@ -890,7 +879,7 @@ function PropertyManager:process_cycle_properties(field_as_string, properties, c
 end
 
 
---MARK: PM_utils
+--MARK: res_lable
 function PropertyManager:getVideoResolutionLabel()
     local width = self.property_map.values["video-params/w"] or ""
     local height = self.property_map.values["video-params/h"] or ""
@@ -903,6 +892,7 @@ function PropertyManager:getVideoResolutionLabel()
     end
     return height and height .. "p" or nil
 end
+--MARK: format_lable
 function PropertyManager:getMediaFormatLabel()
     local path = self.property_map.values["path"]
     local extension = path and path:match("%.([^%.]+)$")
@@ -925,6 +915,7 @@ function PropertyManager:getMediaFormatLabel()
     end
     return extension
 end
+--MARK: extract_props
 function PropertyManager:extract_properties(input_string)
     if not input_string then return {} end
     local properties = {}
