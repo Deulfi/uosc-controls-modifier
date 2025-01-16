@@ -146,3 +146,8 @@ Reverts to the original default state.
       print("name:", name, "json:", json)
    end)
    ```
+   - Changing the default state via key (input.conf)
+   ```
+   ctrl+1    script-message-to    uosc_controls_modifier    set-default    state_2
+   ctrl+2    script-message-to    uosc_controls_modifier    revert-default
+   ```
