@@ -133,7 +133,7 @@ Reverts to the original default state.
    ```
    controls=button:alt_control_items,button:alt_control_loop,gap,fullscreen,gap,button:alt_format,gap,<video>button:alt_resolution
    ```
-      - Interaction from other scripts.
+   - Interaction from other scripts.
    ```
    local state_map="state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID,state_2:x"
 
