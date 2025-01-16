@@ -540,6 +540,7 @@ function ButtonManager:register_message_handler(state_name)
 
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
+            mp.msg.error("set default")
             mp.set_property_number("user-data/ucm_currstate", 1)
             self:show_default()
             return
@@ -551,6 +552,7 @@ function ButtonManager:register_message_handler(state_name)
                 break
             end
         end
+        mp.msg.error("set ",state_name)
         self:set_button_state(state_name)  
     end)
 end
@@ -586,18 +588,23 @@ function ButtonManager:register_default_handlers()
     -- Store initial modifier state configuration for restoration
     if self.default_state_name == "" or self.default_state_name == nil then return end
     local initial_state_map = shallow_copy(self.state_map)
+    local initial_cycle_map = shallow_copy(options.state_cycle_map)
     local initial_default = self.default_state_name
 
     -- Handler to change the default state
     mp.register_script_message('set-default', function(new_default_state)
         local previous_default = self.state_map['default']
-        
+        local prev_cycle_index = table_find(options.state_cycle_map, previous_default)
+        local new_cycle_index = table_find(options.state_cycle_map, new_default_state)
+        options.state_cycle_map[prev_cycle_index], options.state_cycle_map[new_cycle_index] = options.state_cycle_map[new_cycle_index], options.state_cycle_map[prev_cycle_index]
+        mp.set_property_number("user-data/ucm_currstate", 1)
         -- Swap states to maintain mappings
         for key, state_name in pairs(self.state_map) do
             if state_name == new_default_state then
                 self.state_map[key] = previous_default
             end
         end
+        
         
         -- Set new default and update display
         self.state_map['default'] = new_default_state
@@ -609,6 +616,7 @@ function ButtonManager:register_default_handlers()
     mp.register_script_message('revert-default', function()
         self.state_map = shallow_copy(initial_state_map)
         self.default_state_name = initial_default
+        self.state_cycle_map = shallow_copy(initial_cycle_map)
         self:show_default()
     end)
 end
@@ -1096,6 +1104,7 @@ local function setup_input_events()
     
     -- Register revert_inputevent message handler
     mp.register_script_message('revert_inputevent', function(is_mouse)
+        mp.msg.error("revert_inputevent")
         -- Create new timer that is either killed as lonng as keyboard key is pressed or runs out if mousebutton
         revert_timer = mp.add_timeout(0.3 + options.revert_delay/10, function()
             --mp.set_property_number("user-data/ucm_currstate", 1)
@@ -1268,7 +1277,7 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
---TODO: change user-data/ucm_currstate when using set-default
+--TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
 --TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --       first click shows first state until nth state and a final click makes the content button invisible again.
