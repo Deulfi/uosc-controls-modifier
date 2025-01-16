@@ -61,7 +61,8 @@ Cycles to the next state (as defined in the conf file in either state_map or sta
 Cycles to the previous state (as above)
 
 
-- Script messages that are only useful for other scripts. recipient is the script name of the script that is sending the message (name of your script).
+Script messages that are only useful for other scripts. recipient is the script name of the script that is sending the message (name of your script).
+
 `update-button` buttonname   
 Updates the button state to the current state. This should always happen automatically, but you never know.
 
@@ -90,7 +91,7 @@ Gets one button as a json string.
 Sets one button to the provided json string.
 
 
-- script messages that are only useful if inputevent is used. For example if you define a state for fullscreen, then you could create an auto profile that sets the default state to fullscreen when in fullscreen mode and the state reverts back to fullscreen after an mod key is pressed.
+script messages that are only useful if inputevent is used. For example if you define a state for fullscreen, then you could create an auto profile that sets the default state to fullscreen when in fullscreen mode and the state reverts back to fullscreen after an mod key is pressed.
 
 `set-default` statename     
 A different state will be marked as default state.
