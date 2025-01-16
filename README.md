@@ -102,12 +102,14 @@ A different state will be marked as default state.
 Reverts to the original default state.
 
 ##  Examples:
-   - Change buttons when a modifier key is held. They will be automatically registered with inputevent.lua
+   - Change buttons when a modifier key is held. Keys will be automatically registered with inputevent.lua (uosc_controls_modifier.conf)
    ``` 
-   # without inputevent
-   state_map=state_1,state_2,state_3
    # with inputevent
    state_map=state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID
+   # without inputevent
+   state_map=state_1,state_2,state_3
+   # without both, first state of first button will be default
+   state_map=
    ```
    - Toggle between states without modifier keys. (input.conf)
    ```
@@ -118,19 +120,7 @@ Reverts to the original default state.
    ctrl+5    script-message-to    uosc_controls_modifier    cycle
    ctrl+6    script-message-to    uosc_controls_modifier    cycle-back
    ```
-   - Interaction from other scripts.
-   ```
-   local state_map="state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID,state_2:x"
 
-   mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-state-map', state_map)
-   ```
-   or
-   ```
-   mp.commandv('script-message-to', 'uosc_controls_modifier', 'get-button', script_name, 'alt_cycle')
-   mp.register_script_message('receive-button', function(name,json)
-      print("name:", name, "json:", json)
-   end)
-   ```
    - Show different default buttons in fullscreen vs. windowed mode. This is only useful if you use modifier keys (mpv.conf)
    ```
    [fullscreen-profile]
@@ -142,4 +132,17 @@ Reverts to the original default state.
    - uosc.conf controls with example buttons
    ```
    controls=button:alt_control_items,button:alt_control_loop,gap,fullscreen,gap,button:alt_format,gap,<video>button:alt_resolution
+   ```
+      - Interaction from other scripts.
+   ```
+   local state_map="state_1:default,state_2:MBTN_RIGHT,state_3:MBTN_MID,state_2:x"
+
+   mp.commandv('script-message-to', 'uosc_controls_modifier', 'set-state-map', state_map)
+   ```
+   or
+   ```
+   mp.commandv('script-message-to', 'uosc_controls_modifier', 'get-button', script_name, 'alt_cycle')
+   mp.register_script_message('receive-button', function(name,json)
+      print("name:", name, "json:", json)
+   end)
    ```
