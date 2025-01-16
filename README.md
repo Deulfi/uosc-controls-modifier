@@ -37,51 +37,51 @@ Example usage: `ctrl+1 script-message-to uosc_controls_modifier set name_of_a_st
 `set` statename  
 All buttons with the provided state will be updated to the state.
 
-`set-button-state` buttonname statename
+`set-button-state` buttonname statename 
 Sets one button to a specific state. 
 
-`cycle`
+`cycle` 
 Cycles to the next state (as defined in the conf file in either state_map or state_cycle_map)
 
-`cycle-back`
+`cycle-back` 
 Cycles to the previous state (as above)
 
 
-# Script messages that are only useful for other scripts. recipient is the script name of the script that is sending the message (name of your script).
-`update-button` buttonname
+- Script messages that are only useful for other scripts. recipient is the script name of the script that is sending the message (name of your script).
+`update-button` buttonname 
 Updates the button state to the current state. This should always happen automatically, but you never know.
 
-`get-cycle-states` recipient
+`get-cycle-states` recipient 
 Gets the current cycle states as a json string.
 
-`set-cycle-states` new_states
+`set-cycle-states` new_states 
 Sets the cycle states to the provided json string.
 
-`get-state-map` recipient
+`get-state-map` recipient 
 Gets the current state map as a json string.
 
-`set-state-map` new_map
+`set-state-map` new_map 
 Sets the state map to the provided json string.
 
-`get-buttons` recipient
+`get-buttons` recipient 
 Gets all buttons as a json string.
 
-`set-buttons` buttons_json
+`set-buttons` buttons_json 
 Sets all buttons to the provided json string.
 
-`get-button` recipient button_name
+`get-button` recipient button_name 
 Gets one button as a json string.
 
-`set-button` button_name button_json
+`set-button` button_name button_json 
 Sets one button to the provided json string.
 
 
 # script messages that are only useful if inputevent is used. For example if you define a state for fullscreen, then you could create an auto profile that
 # sets the default state to fullscreen when in fullscreen mode and the state reverts back to fullscreen after an mod key is pressed.
-`set-default` statename  
+`set-default` statename   
 A different state will be marked as default state.
 
-`revert-default`  
+`revert-default`   
 Reverts to the original default state.
 
 ## Button:
