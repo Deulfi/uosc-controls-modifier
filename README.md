@@ -76,8 +76,7 @@ Gets one button as a json string.
 Sets one button to the provided json string.
 
 
-# script messages that are only useful if inputevent is used. For example if you define a state for fullscreen, then you could create an auto profile that
-# sets the default state to fullscreen when in fullscreen mode and the state reverts back to fullscreen after an mod key is pressed.
+- script messages that are only useful if inputevent is used. For example if you define a state for fullscreen, then you could create an auto profile that sets the default state to fullscreen when in fullscreen mode and the state reverts back to fullscreen after an mod key is pressed.
 `set-default` statename   
 A different state will be marked as default state.
 
