@@ -151,3 +151,7 @@ Reverts to the original default state.
    ctrl+1    script-message-to    uosc_controls_modifier    set-default    state_2
    ctrl+2    script-message-to    uosc_controls_modifier    revert-default
    ```
+   - changing the content of a button via key is also possible (input.conf)
+   ```
+   ctrl+7 script-message-to uosc_controls_modifier set-button new_button {"state_1":{"icon":"play_arrow","tooltip":"Play","command":"set pause no"},"state_2":{"icon":"pause","tooltip":"Pause","command":"set pause yes"},"fullscreen":{"icon":""}}
+   ```

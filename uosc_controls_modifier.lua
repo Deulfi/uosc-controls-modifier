@@ -346,6 +346,7 @@ function Button:initialize_states(default_state_name)
         -- Initialize translated states
         self.states_translated[state_name] = shallow_copy(self.states[state_name])
     end
+    self:show_default()
     return self
 end
 
@@ -354,12 +355,12 @@ function Button:update_default(default_state_name)
         self.default_state_name = default_state_name
     end
 end
-function Button:update_default_state()
+function Button:show_default()
     self:update_state(self.default_state_name)
 end
 --MARK: update_state
 function Button:update_state(state_name)
-    local state = self.states_translated[state_name] or self.active_state
+    local state = self.states_translated and self.states_translated[state_name] or self.active_state
     if not state then
         if options.fill_up_states then
             mp.msg.warn("Unknown state:",state, "name:", state_name, "button:", self.name)
@@ -1267,7 +1268,7 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
-
+--TODO: change user-data/ucm_currstate when using set-default
 --TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --       first click shows first state until nth state and a final click makes the content button invisible again.
