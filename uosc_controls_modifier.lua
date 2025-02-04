@@ -585,41 +585,64 @@ end
 --- Registers handlers for managing default button states and state restoration
 --- @param self ButtonManager The ButtonManager instance
 function ButtonManager:register_default_handlers()
-    -- Store initial modifier state configuration for restoration
-    if self.default_state_name == "" or self.default_state_name == nil then return end
-    local initial_state_map = shallow_copy(self.state_map)
-    local initial_cycle_map = shallow_copy(options.state_cycle_map)
-    local initial_default = self.default_state_name
+    -- Only proceed if we have a valid default state
+    if not self.default_state_name or self.default_state_name == "" then
+        mp.msg.debug("No default state configured - skipping handler registration")
+        return
+    end
 
-    -- Handler to change the default state
+    -- Store initial configuration snapshots
+    local initial_config = {
+        state_map = shallow_copy(self.state_map),
+        cycle_map = shallow_copy(options.state_cycle_map),
+        default_state = self.default_state_name
+    }
+
+    -- Handler to change default state
     mp.register_script_message('set-default', function(new_default_state)
+        if not new_default_state or not self.unique_states[new_default_state] then
+            mp.msg.debug("Invalid new default state requested:", new_default_state)
+            return
+        end
+
         local previous_default = self.state_map['default']
-        local prev_cycle_index = table_find(options.state_cycle_map, previous_default)
-        local new_cycle_index = table_find(options.state_cycle_map, new_default_state)
-        options.state_cycle_map[prev_cycle_index], options.state_cycle_map[new_cycle_index] = options.state_cycle_map[new_cycle_index], options.state_cycle_map[prev_cycle_index]
+        
+        -- Update cycle map positions
+        local prev_index = table_find(options.state_cycle_map, previous_default)
+        local new_index = table_find(options.state_cycle_map, new_default_state)
+        
+        if prev_index and new_index then
+            options.state_cycle_map[prev_index], options.state_cycle_map[new_index] = 
+                options.state_cycle_map[new_index], options.state_cycle_map[prev_index]
+        end
+
+        -- Reset cycle state counter
         mp.set_property_number("user-data/ucm_currstate", 1)
-        -- Swap states to maintain mappings
+
+        -- Update state mappings
         for key, state_name in pairs(self.state_map) do
             if state_name == new_default_state then
                 self.state_map[key] = previous_default
             end
         end
         
-        
-        -- Set new default and update display
+        -- Set new default
         self.state_map['default'] = new_default_state
         self.default_state_name = new_default_state
+        
+        -- Update display
         self:show_default()
     end)
 
-    -- Handler to restore original default state configuration
+    -- Handler to restore original configuration
     mp.register_script_message('revert-default', function()
-        self.state_map = shallow_copy(initial_state_map)
-        self.default_state_name = initial_default
-        self.state_cycle_map = shallow_copy(initial_cycle_map)
+        self.state_map = shallow_copy(initial_config.state_map)
+        self.default_state_name = initial_config.default_state
+        options.state_cycle_map = shallow_copy(initial_config.cycle_map)
         self:show_default()
     end)
 end
+
 
 --MARK: ###########
 
@@ -1278,6 +1301,7 @@ mp.register_script_message('set-button', function(...)
 end)
 
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
+        -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
 --TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --       first click shows first state until nth state and a final click makes the content button invisible again.
