@@ -91,7 +91,7 @@ local options = {
   button29 = "",
   button30 = "",
 
-  fill_up_states = false,
+  fill_up_states = true,
   falsy_values = { "", "no", "false", "0", false, nil, 0, "0", "nil" },
 }
 mp.utils = require "mp.utils"
@@ -444,16 +444,18 @@ function ButtonManager:manage_unique_states(button_states)
 
     if next(new_states) and options.fill_up_states then
         mp.msg.debug("Updating existing buttons with new states")
-        for _, button in ipairs(self.buttons) do
-            for _, state in ipairs(self.unique_states_map) do
+        for _, button in pairs(self.buttons) do
+            for state in pairs(self.unique_states) do
                 if not button.states[state] then
                     mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
-                    button.states[state] = button.states[self.state_map['default']]
+                    button.states[state] = shallow_copy(button.states[self.state_map['default']])
+                    mp.msg.debug("state is:", mp.utils.to_string(button.states[state]))
                 end
             end
         end
     end
 end
+
 
 --MARK: init buttons
 function ButtonManager:initialize_buttons()
@@ -597,6 +599,7 @@ function ButtonManager:register_default_handlers()
         cycle_map = shallow_copy(options.state_cycle_map),
         default_state = self.default_state_name
     }
+    
 
     -- Handler to change default state
     mp.register_script_message('set-default', function(new_default_state)
@@ -605,27 +608,35 @@ function ButtonManager:register_default_handlers()
             return
         end
 
+
         local previous_default = self.state_map['default']
         
         -- Update cycle map positions
         local prev_index = table_find(options.state_cycle_map, previous_default)
         local new_index = table_find(options.state_cycle_map, new_default_state)
-        
-        if prev_index and new_index then
-            options.state_cycle_map[prev_index], options.state_cycle_map[new_index] = 
-                options.state_cycle_map[new_index], options.state_cycle_map[prev_index]
-        end
 
-        -- Reset cycle state counter
-        mp.set_property_number("user-data/ucm_currstate", 1)
+        if prev_index then
+            if new_index then
+                -- Swap existing states
+                options.state_cycle_map[prev_index], options.state_cycle_map[new_index] = 
+                    options.state_cycle_map[new_index], options.state_cycle_map[prev_index]
+            else
+                -- Replace previous default with new state
+                options.state_cycle_map[prev_index] = new_default_state
+            end
+        end
 
         -- Update state mappings
         for key, state_name in pairs(self.state_map) do
-            if state_name == new_default_state then
-                self.state_map[key] = previous_default
+            if state_name == previous_default then
+                mp.msg.error("Updating state mapping for:", key, "to:", new_default_state)
+                self.state_map[key] = new_default_state
             end
         end
         
+        -- Reset cycle state counter
+        mp.set_property_number("user-data/ucm_currstate", 1)
+
         -- Set new default
         self.state_map['default'] = new_default_state
         self.default_state_name = new_default_state
@@ -1300,6 +1311,7 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
+--TODO: fill up states not working anymore
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
         -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
 --TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
