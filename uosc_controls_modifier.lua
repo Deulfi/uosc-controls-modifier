@@ -821,11 +821,7 @@ function PropertyManager:handle_substitution(button, caller, data)
 
         local state = button.states[state_name]
         local translated = button.states_translated[state_name]
-        --print("handle_substitution", state_name, prop_name, field_type)
-        if button.name == "Sponsorblock_Button" then
-            local skip_ads = mp.get_property_native("skip_ads")
-            print("handle_substitution", state_name, prop_name, field_type, skip_ads)
-        end
+
         if not state then 
             mp.msg.warn(string.format("State '%s' not found for button '%s'", state_name, mp.utils.format_json(button.states)))
             return 
@@ -1361,7 +1357,6 @@ mp.register_script_message('set-button', function(...)
         -- Defer the button setup until manager is ready
         mp.add_timeout(0.1, function()
             mp.commandv('script-message-to', script_name, 'set-button', button_name, states_json)
-            print("set-button waited for 0.1") 
         end)
         return
     end
