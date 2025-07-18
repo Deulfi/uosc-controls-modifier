@@ -102,6 +102,7 @@ mp.options.read_options(options, script_name)
 local track_state_properties = {}
 local PropertyManager = {}
 local ButtonManager = {}
+local buttonmanager_setup_finished = false
 local state_map = {}
 
 --local placeholders = {
@@ -149,7 +150,7 @@ local messages = {
     success_button = "Successfully translated button '%s' with %d states",
     success_total = "Total buttons translated: %d",
     no_valid_buttons = "No valid buttons configured from %s.conf",
-    No_default_state ="No default state defined for button '%s'",
+    no_default_state ="No default state defined for button '%s'",
 }
 
 
@@ -421,7 +422,7 @@ function ButtonManager:init()
     mp.register_script_message('update-button', function(button_name)
         self:update_button(button_name)
     end)
-    
+    buttonmanager_setup_finished = true
 end
 --MARK: manage uniques
 function ButtonManager:manage_unique_states(button_states)
@@ -504,6 +505,32 @@ function ButtonManager:register_new_button(button_name, button_states)
 end
 
 
+--MARK: update_button_data
+function ButtonManager:update_button_data(button_name, button_states)
+
+    -- Update the button's states
+    local button = self.buttons[button_name]
+    button.states = button_states
+    
+    -- Re-translate properties and reinitialize
+    local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
+    button.states = processed_states
+    button.states_translated = {}
+    
+    -- Reinitialize the button with new states
+    button:initialize_states(self.default_state_name or self:aprox_default())
+    
+    -- Update property tracking
+    self.property_manager:track_states_properties(button_name, button.states)
+    
+    -- Manage unique states for the updated button
+    self:manage_unique_states({[button_name] = {states = button_states}})
+    
+    -- Update the button display
+    button:update_state(self.current_active_state)
+end
+
+
 --MARK: set_button_state
 function ButtonManager:set_button_state(state_name)
     mp.msg.trace("setting button state to " , state_name)
@@ -512,6 +539,7 @@ function ButtonManager:set_button_state(state_name)
         return 
     end
     if not self.unique_states[state_name] then
+        if not options.state_map[state_name] then return end
         mp.msg.warn(string.format("State %s does not exist.", state_name))
         mp.msg.debug(string.format("State %s not in unique states.", state_name))
         return
@@ -793,7 +821,20 @@ function PropertyManager:handle_substitution(button, caller, data)
 
         local state = button.states[state_name]
         local translated = button.states_translated[state_name]
-
+        --print("handle_substitution", state_name, prop_name, field_type)
+        if button.name == "Sponsorblock_Button" then
+            local skip_ads = mp.get_property_native("skip_ads")
+            print("handle_substitution", state_name, prop_name, field_type, skip_ads)
+        end
+        if not state then 
+            mp.msg.warn(string.format("State '%s' not found for button '%s'", state_name, mp.utils.format_json(button.states)))
+            return 
+        end
+        
+        if not translated then
+            mp.msg.warn(string.format("Translated state '%s' not found for button '%s': %s", state_name, button.name, mp.utils.format_json(button.states_translated)))
+            return
+        end
         local orig_field = state[field_type]
         local tran_field = translated[field_type]
         local new_values = {}
@@ -1205,6 +1246,9 @@ local function safe_json_stringify(data, error_context)
     return result
 end
 
+local pending_buttons = {}
+
+
 mp.register_script_message('cycle', function()
     local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
     local num_states = #options.state_cycle_map
@@ -1307,7 +1351,42 @@ mp.register_script_message('set-button', function(...)
         mp.msg.debug("Failed to parse button states JSON")
         return 
     end
+    -- Check if manager/statemap is initialized
+    -- This is an race condition that actually happend to me. One script with all buttons and statemap
+    -- a second script for a sponsorskip-minimal button that initialized before and broke.
+    if not buttonmanager_setup_finished or 
+    not manager.state_map.default or 
+    manager.state_map.default == "" then
+        mp.msg.warn("Manager not initialized, deferring button setup:", button_name)
+        -- Defer the button setup until manager is ready
+        mp.add_timeout(0.1, function()
+            mp.commandv('script-message-to', script_name, 'set-button', button_name, states_json)
+            print("set-button waited for 0.1") 
+        end)
+        return
+    end
+
+
     manager:register_new_button(button_name, button_states)
+    return true
+end)
+mp.register_script_message('update-button-data', function(...)
+    local args = {...}
+    local button_name = args[1]
+    local states_json = table.concat(args, " ", 2)
+
+    local button_states = safe_json_parse(states_json, "update-button failed")
+    if not button_states then 
+        mp.msg.debug("Failed to parse button states JSON")
+        return 
+    end
+    -- Check if button already exists - update it instead of creating new
+    if manager.buttons[button_name] then
+        manager:update_button_data(button_name, button_states)
+    else 
+        mp.msg.debug("Button not found:", button_name)
+        return false
+    end
     return true
 end)
 
