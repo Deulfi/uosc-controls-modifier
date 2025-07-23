@@ -42,7 +42,8 @@ local options = {
             icon = "example_3",
             tooltip = "example_3",
             badge = "3",
-            active = "nil"
+            active = "nil",
+            hide = "false",
         },
         state_1 = {
             icon = "exmample",
@@ -178,6 +179,7 @@ local function table_find(tbl, value)
 end
 
 local function shallow_copy(t)
+    if t == nil or type(t) ~= "table" then return nil end
     local t2 = {}
     for k,v in pairs(t) do
         t2[k] = v
@@ -349,12 +351,16 @@ function Button:update_state(state_name)
     if state.badge   == "nil" then state.badge   = nil end
     if state.tooltip == "nil" then state.tooltip = nil end
 
+    if state.hide == "true" then state.hide = true end
+    if state.hide == "false" then state.hide = false end
+
     mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
         icon    = state.icon,
         badge   = state.badge,
         active  = state.active,
         tooltip = state.tooltip,
         command = state.command,
+        hide    = state.hide or false,
     }))
 end
 --MARK: ############
@@ -470,13 +476,39 @@ function ButtonManager:initialize_buttons()
     end
 end
 -- better than nothing
-function ButtonManager:aprox_default()
+function ButtonManager:aprox_default(fallback_states)
     local state_count = {}
+    local source = nil
+    local source_name = ""
     
-    for button_name, button in pairs(self.buttons) do
-        for state_name in pairs(button.states) do
+    -- Try self.buttons first
+    if self.buttons and next(self.buttons) then
+        source = self.buttons
+        source_name = "self.buttons"
+        for button_name, button in pairs(source) do
+            for state_name in pairs(button.states) do
+                state_count[state_name] = (state_count[state_name] or 0) + 1
+            end
+        end
+    -- Try options.buttons
+    elseif options.buttons and next(options.buttons) then
+        source = options.buttons
+        source_name = "options.buttons"
+        for button_name, button_states in pairs(source) do
+            for state_name in pairs(button_states) do
+                state_count[state_name] = (state_count[state_name] or 0) + 1
+            end
+        end
+    -- Try fallback_states parameter
+    elseif fallback_states and next(fallback_states) then
+        source = {temp_button = fallback_states}
+        source_name = "fallback_states"
+        for state_name in pairs(fallback_states) do
             state_count[state_name] = (state_count[state_name] or 0) + 1
         end
+    else
+        mp.msg.error("aprox_default: No button data available - self.buttons, fallback_states, and options.buttons are all empty")
+        return ""
     end
 
     local max_count = 0
@@ -489,6 +521,15 @@ function ButtonManager:aprox_default()
         end
     end
 
+    mp.msg.debug(string.format("aprox_default: Using %s, found default state: %s", source_name, most_frequent_state))
+
+    -- Fix broken/missing state_map
+    if most_frequent_state and most_frequent_state ~= "" then
+        self.state_map['default'] = most_frequent_state
+        self.default_state_name = most_frequent_state
+        mp.msg.debug("aprox_default: Updated state_map['default'] to:", most_frequent_state)
+    end
+
     return most_frequent_state
 end
 
@@ -496,8 +537,12 @@ function ButtonManager:initialize_button(button_name, button_states)
     local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
     
     local button = Button.new(button_name, processed_states)
-    
-    button:initialize_states(self.default_state_name or self.aprox_default())
+    -- if self.default_state_name is empty or nil, aprox a default
+    local state_name = self.default_state_name
+    if not state_name or state_name == "" then
+        state_name = self:aprox_default(button_states)
+    end
+    button:initialize_states(state_name)
     self.property_manager:track_states_properties(button_name, button.states)
     
     self.buttons[button_name] = button
@@ -523,7 +568,12 @@ function ButtonManager:update_button_data(button_name, button_states)
     button.states_translated = {}
     
     -- Reinitialize the button with new states
-    button:initialize_states(self.default_state_name or self:aprox_default())
+    -- if self.default_state_name is empty or nil, aprox a default
+    local state_name = self.default_state_name
+    if not state_name or state_name == "" then
+        state_name = self:aprox_default(button_states)
+    end
+    button:initialize_states(state_name)
     
     -- Update property tracking
     self.property_manager:track_states_properties(button_name, button.states)
@@ -737,11 +787,11 @@ function PropertyManager.new()
     local self = setmetatable({}, PropertyManager)
     --self.button_manager = button_manager
     self.property_map = {
-        standard = {},    
-        special  = {},
-        values   = {},  
+        standard    = {},    
+        special     = {},
+        values      = {},  
         field_types = {},   
-        buttons  = {},     
+        buttons     = {},     
     }
 
     mp.register_script_message('cycle-prop-values', function(prop, ...)
@@ -1180,6 +1230,7 @@ local function safe_json_stringify(data, error_context)
 end
 
 mp.register_script_message('cycle', function()
+    if not options.state_cycle_map then return end
     local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
     local num_states = #options.state_cycle_map
     local next_state = ((current_state) % num_states) + 1
@@ -1286,27 +1337,28 @@ mp.register_script_message('set-button', function(...)
 
     if not button_states then 
         mp.msg.debug("Failed to parse button states JSON")
-        return 
+        return false
     end
     -- Check if manager/statemap is initialized
     -- This is an race condition that actually happend to me. One script with all buttons and statemap
     -- a second script for a sponsorskip-minimal button that initialized before (the statemap) and broke.
     -- Add retry_count parameter (optional, defaults to 0)
-    if not buttonmanager_setup_finished or 
-       not manager.state_map.default or 
-       manager.state_map.default == "" then
-        
-        if retry_count < 10 then  -- Max 10 retries = 1 second
-            mp.add_timeout(0.1, function()
-                retry_count = retry_count + 1
-                mp.commandv('script-message-to', script_name, 'set-button', 
-                           button_name, states_json)
-            end)
-        else
-            mp.msg.error("Manager initialization timeout for button:", button_name)
-        end
-        return
-    end
+    --if not buttonmanager_setup_finished or 
+    --   not manager.state_map.default or 
+    --   manager.state_map.default == "" then
+    --    
+    --    if retry_count < 10 then  -- Max 10 retries = 1 second
+    --        mp.add_timeout(0.1, function()
+    --            retry_count = retry_count + 1
+    --            mp.commandv('script-message-to', script_name, 'set-button', 
+    --                       button_name, states_json)
+    --        end)
+    --    else
+    --        mp.msg.error("Manager initialization timeout for button:", button_name)
+    --        return false
+    --    end
+    --    return true
+    --end
 
     if manager.buttons[button_name] then
         manager:update_button_data(button_name, button_states)
@@ -1317,9 +1369,10 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
---TODO: fill up states not working anymore
+--TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
         -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
+        -- me.v.2.0: ??? no clue.
 --TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
 --TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
 --       first click shows first state until nth state and a final click makes the content button invisible again.
