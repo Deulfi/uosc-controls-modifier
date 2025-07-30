@@ -644,7 +644,7 @@ function ButtonManager:register_message_handler(state_name)
 
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
-            mp.msg.debug("set state to default state")
+            msg.debug("set state to default state")
             mp.set_property_number("user-data/ucm_currstate", 1)
             self:show_default()
             return
@@ -656,7 +656,7 @@ function ButtonManager:register_message_handler(state_name)
                 break
             end
         end
-        mp.msg.error("set ",state_name)
+        msg.debug("set state to:", state_name)
         self:set_button_state(state_name)  
     end)
 end
@@ -709,20 +709,7 @@ function ButtonManager:register_default_handlers()
             return
         end
 
-
-        --if button_name == "alt_next" then
-        --    print("button_name", button_name)
-        --    print("new_default_state", new_default_state)
-        --    for state_name, state in pairs(button.states) do
-        --        print("state_name", state_name)
-        --        print("state", mp.utils.to_string(state))
-        --    end
-        --    for button_name, button in pairs(self.buttons) do
-        --    end
-        --end
-
         -- Replace previous default with new state in cycle map
-
         local previous_default = self.state_map['default']
         
         -- Update cycle map positions
@@ -743,7 +730,7 @@ function ButtonManager:register_default_handlers()
         -- Update state mappings
         for key, state_name in pairs(self.state_map) do
             if state_name == previous_default then
-                mp.msg.error("Updating state mapping for:", key, "to:", new_default_state)
+                msg.debug("Updating state mapping for:", key, "to:", new_default_state)
                 self.state_map[key] = new_default_state
             end
         end
@@ -757,23 +744,10 @@ function ButtonManager:register_default_handlers()
         
         -- Update display
         self:show_default()
-
-        --msg.debug("initial_config", mp.utils.to_string(initial_config))
-        --msg.debug("new_default_state", new_default_state)
-        --msg.debug("self.state_map", mp.utils.to_string(self.state_map))
-        --msg.debug("self.default_state_name", self.default_state_name)
-        --msg.debug("options.state_cycle_map", mp.utils.to_string(options.state_cycle_map))
     end)
 
     -- Handler to restore original configuration
     mp.register_script_message('revert-default', function()
-        for button_name, button in pairs(self.buttons) do
-            --msg.debug("button_name", button_name)
-            for state_name, state in pairs(button.states) do
-                --msg.debug("state_name", state_name)
-                --msg.debug("state", mp.utils.to_string(state))
-            end
-        end
         self.state_map = shallow_copy(initial_config.state_map)
         self.default_state_name = initial_config.default_state
         options.state_cycle_map = shallow_copy(initial_config.cycle_map)
