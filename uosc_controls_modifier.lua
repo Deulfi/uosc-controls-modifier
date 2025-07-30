@@ -81,6 +81,7 @@ local options = {
   falsy_values = { "", "no", "false", "0", false, nil, 0, "0", "nil" },
 }
 mp.utils = require "mp.utils"
+local msg = require "mp.msg"
 mp.options = require "mp.options"
 local script_name = mp.get_script_name()
 mp.options.read_options(options, script_name)
@@ -140,7 +141,6 @@ local messages = {
 local function extract_properties(input_string)
     if not input_string then return nil end
     local results = {}
-    --for match in input_string:gmatch("%[%[(.-)%]%]") do
     for match in input_string:gmatch("%[%[([^%]]+)%]%]") do
         table.insert(results, match)
     end
@@ -354,6 +354,8 @@ function Button:update_state(state_name)
     if state.hide == "true" then state.hide = true end
     if state.hide == "false" then state.hide = false end
 
+    --msg.error("Button name: ", self.name,"state_name: ", state_name, "tooltip ", state.tooltip)
+
     mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
         icon    = state.icon,
         badge   = state.badge,
@@ -454,16 +456,31 @@ function ButtonManager:manage_unique_states(button_states)
         end
     end
 
-    if next(new_states) and options.fill_up_states then
+    -- Always update ALL buttons with ALL unique states to prevent race conditions
+    if options.fill_up_states and next(self.buttons) then 
         mp.msg.debug("Updating existing buttons with new states")
-        for _, button in pairs(self.buttons) do
+        for index, button in pairs(self.buttons) do
+            -- Get the default state for this button
+            local default_state_name = button.default_state_name or self.default_state_name
+            local default_state = button.states[default_state_name]
+            local default_translated = button.states_translated[default_state_name]
+            
+            if not default_state then
+                mp.msg.warn("No default state found for button " .. button.name .. ", skipping state fill-up")
+                goto continue
+            end
+            
             for state in pairs(self.unique_states) do
                 if not button.states[state] then
                     mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
-                    button.states[state] = shallow_copy(button.states[self.state_map['default']])
-                    mp.msg.debug("state is:", mp.utils.to_string(button.states[state]))
+                    button.states[state] = shallow_copy(default_state)
+                    -- we don't want to copy the translated states but we want to have the same values always
+                    -- shouldn't matter if we change a value in the default state or any other. they are always the same value
+                    -- the translated_states are the values we actually give uosc to process.
+                    button.states_translated[state] = button.states_translated[default_state_name]
                 end
             end
+            ::continue::
         end
     end
 end
@@ -546,12 +563,14 @@ function ButtonManager:initialize_button(button_name, button_states)
     self.property_manager:track_states_properties(button_name, button.states)
     
     self.buttons[button_name] = button
+    msg.debug("Button added:", button_name)
 end
 --MARK: register_button
 function ButtonManager:register_new_button(button_name, button_states)
-    -- Initialize the button
-    self:manage_unique_states({button_states})
+    -- First initialize the button
     self:initialize_button(button_name, button_states)
+    -- Then manage unique states to fill up all buttons (including the new one)
+    self:manage_unique_states({[button_name] = {states = button_states}})
 end
 
 
@@ -625,7 +644,7 @@ function ButtonManager:register_message_handler(state_name)
 
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
-            mp.msg.error("set default")
+            mp.msg.debug("set state to default state")
             mp.set_property_number("user-data/ucm_currstate", 1)
             self:show_default()
             return
@@ -681,7 +700,7 @@ function ButtonManager:register_default_handlers()
         cycle_map = shallow_copy(options.state_cycle_map),
         default_state = self.default_state_name
     }
-    
+    local button_original_defaults={}
 
     -- Handler to change default state
     mp.register_script_message('set-default', function(new_default_state)
@@ -690,6 +709,19 @@ function ButtonManager:register_default_handlers()
             return
         end
 
+
+        --if button_name == "alt_next" then
+        --    print("button_name", button_name)
+        --    print("new_default_state", new_default_state)
+        --    for state_name, state in pairs(button.states) do
+        --        print("state_name", state_name)
+        --        print("state", mp.utils.to_string(state))
+        --    end
+        --    for button_name, button in pairs(self.buttons) do
+        --    end
+        --end
+
+        -- Replace previous default with new state in cycle map
 
         local previous_default = self.state_map['default']
         
@@ -725,10 +757,23 @@ function ButtonManager:register_default_handlers()
         
         -- Update display
         self:show_default()
+
+        --msg.debug("initial_config", mp.utils.to_string(initial_config))
+        --msg.debug("new_default_state", new_default_state)
+        --msg.debug("self.state_map", mp.utils.to_string(self.state_map))
+        --msg.debug("self.default_state_name", self.default_state_name)
+        --msg.debug("options.state_cycle_map", mp.utils.to_string(options.state_cycle_map))
     end)
 
     -- Handler to restore original configuration
     mp.register_script_message('revert-default', function()
+        for button_name, button in pairs(self.buttons) do
+            --msg.debug("button_name", button_name)
+            for state_name, state in pairs(button.states) do
+                --msg.debug("state_name", state_name)
+                --msg.debug("state", mp.utils.to_string(state))
+            end
+        end
         self.state_map = shallow_copy(initial_config.state_map)
         self.default_state_name = initial_config.default_state
         options.state_cycle_map = shallow_copy(initial_config.cycle_map)
@@ -1165,7 +1210,7 @@ local function setup_input_events()
     
     -- Register revert_inputevent message handler
     mp.register_script_message('revert_inputevent', function(is_mouse)
-        mp.msg.error("revert_inputevent")
+        mp.msg.debug("revert_inputevent")
         -- Create new timer that is either killed as long as keyboard key is pressed or runs out if mousebutton
         revert_timer = mp.add_timeout(0.3 + options.revert_delay/10, function()
             --mp.set_property_number("user-data/ucm_currstate", 1)
@@ -1339,26 +1384,6 @@ mp.register_script_message('set-button', function(...)
         mp.msg.debug("Failed to parse button states JSON")
         return false
     end
-    -- Check if manager/statemap is initialized
-    -- This is an race condition that actually happend to me. One script with all buttons and statemap
-    -- a second script for a sponsorskip-minimal button that initialized before (the statemap) and broke.
-    -- Add retry_count parameter (optional, defaults to 0)
-    --if not buttonmanager_setup_finished or 
-    --   not manager.state_map.default or 
-    --   manager.state_map.default == "" then
-    --    
-    --    if retry_count < 10 then  -- Max 10 retries = 1 second
-    --        mp.add_timeout(0.1, function()
-    --            retry_count = retry_count + 1
-    --            mp.commandv('script-message-to', script_name, 'set-button', 
-    --                       button_name, states_json)
-    --        end)
-    --    else
-    --        mp.msg.error("Manager initialization timeout for button:", button_name)
-    --        return false
-    --    end
-    --    return true
-    --end
 
     if manager.buttons[button_name] then
         manager:update_button_data(button_name, button_states)
