@@ -80,6 +80,7 @@ local options = {
   fill_up_states = true,
   falsy_values = { "", "no", "false", "0", false, nil, 0, "0", "nil" },
 }
+local mp = require "mp"
 mp.utils = require "mp.utils"
 local msg = require "mp.msg"
 mp.options = require "mp.options"
@@ -142,7 +143,9 @@ local function extract_properties(input_string)
     if not input_string then return nil end
     local results = {}
     for match in input_string:gmatch("%[%[([^%]]+)%]%]") do
-        table.insert(results, match)
+        -- Remove everything after ?? (including ??)
+        local property_name = match:match("^(.-)%?%?") or match
+        table.insert(results, property_name)
     end
     return #results > 0 and results or nil
 end
@@ -342,10 +345,24 @@ function Button:update_state(state_name)
         return
     end
 
+    --TODO: do this properly in property manager
     self.active_state = state
-    
+    if state and type(state.active) == "string" and state.active:find("%?%?") then
+        local field_as_string = state.active
+        -- Remove [[ and ]] from beginning and end
+        local stripped = field_as_string:gsub("^%[%[", ""):gsub("%]%]$", "")
+ 
+        -- Split by ??
+        local property_name, compare_value = stripped:match("^(.-)%?%?(.+)$")
+
+        -- Get current property value and compare
+        local current_value = mp.get_property(property_name)
+        local bool_result = current_value == compare_value
+        state.active = bool_result
+    end
+
     if  has_value(options.falsy_values, state.active) then
-            state.active = false 
+            state.active = false
     end
 
     if state.badge   == "nil" then state.badge   = nil end
@@ -467,6 +484,7 @@ function ButtonManager:manage_unique_states(button_states)
             
             if not default_state then
                 mp.msg.warn("No default state found for button " .. button.name .. ", skipping state fill-up")
+                -- the fuck is this shit.
                 goto continue
             end
             
@@ -642,6 +660,7 @@ function ButtonManager:register_message_handler(state_name)
     mp.msg.debug("register_message_handlers", 'set ' .. state_name)
     if not state_name then return end
 
+    --TODO: this assumes we only have ucm_currstate as massage handler?
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
             msg.debug("set state to default state")
@@ -760,19 +779,20 @@ function ButtonManager:handle_substitution(button, caller, data)
     local state_name, prop_name, field_type = data.state_name, data.prop, data.type
     if caller ~= prop_name then return end
 
+    
     local state = button.states[state_name]
     local translated = button.states_translated[state_name]
-
+    
     if not state or not translated then return end
     
     local orig_field = state[field_type]
     if not orig_field then return end
 
     local new_values = {}
-    
     -- Handle standard properties
     local props = extract_properties(orig_field)
     if props and has_value(props, prop_name) then
+        
         for _, old_prop_name in ipairs(props) do
             local value = self.property_manager.property_map.values[old_prop_name] or ""
             local pattern = ("[[" .. old_prop_name .. "]]"):gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
@@ -866,6 +886,8 @@ function PropertyManager:track_states_properties(button_name, states)
                     end
                 end
             end
+            --TODO: Same for [[prop??*]]
+
         end
     end
 end
@@ -904,6 +926,9 @@ function PropertyManager:translate_button_properties(button_name, button_states)
                 local props = extract_properties(state[field])
                 if props then
                     state[field], state.command = self:process_selfupdating_props(state[field], props, state.command)
+                    if field == "active" then
+                        --state["active"] = self:process_customcompare_props(state["active"])
+                    end
                 end
             end
         end
@@ -923,6 +948,7 @@ function PropertyManager:process_selfupdating_props(field_as_string, properties,
     end
 
     for _, prop in ipairs(properties) do
+        -- custom cycle for props
         if prop:match("^user%-data/") and prop:find("%?") then
             local property_name, cycle_values = unpack(split(prop, "?"))
             local initial_value = split(cycle_values, " ")[1]
@@ -947,6 +973,27 @@ function PropertyManager:process_selfupdating_props(field_as_string, properties,
     return result, table.concat(command_parts)
 end
 
+--TODO: make proper
+function PropertyManager:process_customcompare_props(field_as_string)
+    
+    -- Remove [[ and ]] from beginning and end
+    local stripped = field_as_string:gsub("^%[%[", ""):gsub("%]%]$", "")
+
+    
+    -- Split by ??
+    local property_name, compare_value = stripped:match("^(.-)%?%?(.+)$")
+    
+    if not property_name or not compare_value then
+
+        return false
+    end
+
+    -- Get current property value and compare
+    local current_value = mp.get_property(property_name)
+    local bool_result = current_value == compare_value
+    
+    return bool_result
+end
 
 --MARK: res_lable
 function PropertyManager:getVideoResolutionLabel()
@@ -1368,6 +1415,7 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
+--TODO: instead of ?? and making it active, making the active default would be nicer.
 --TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
         -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
