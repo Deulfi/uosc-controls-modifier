@@ -121,6 +121,20 @@ local placeholders_command = {
     {pattern = "%?%(c%)", command = "script-message-to " .. script_name .. " cycle"}
 }
 
+-- placholder for active states porp??value compares the property against the value and returns true or false / makes the 
+-- apear button active/inactive (white background)
+-- NOTE: raw_pattern contains capture groups; gsub in insert_values_in_field
+-- may behave unexpectedly if compare_value contains special pattern characters
+-- (e.g. wasapi/{cc0329e7-16c2-4bd2-aef0-345408a33b9e}, this works but who knows if other things will)
+local placeholders_active = {
+    ["%[%[(.-)%?%?(.-)%]%]"] = {
+        fun = function(self, property_name, compare_value)
+            local current_value = mp.get_property(property_name)
+            return current_value == compare_value and "true" or "false"
+        end
+    }
+}
+
 local messages = {
     already_configured = "Buttons already configured, skipping parsing",
     invalid_format = "Button %d: Invalid format - expected 'button_name, config'. Found: %s",
@@ -345,22 +359,9 @@ function Button:update_state(state_name)
         return
     end
 
-    --TODO: do this properly in property manager
+    
     self.active_state = state
-    if state and type(state.active) == "string" and state.active:find("%?%?") then
-        local field_as_string = state.active
-        -- Remove [[ and ]] from beginning and end
-        local stripped = field_as_string:gsub("^%[%[", ""):gsub("%]%]$", "")
  
-        -- Split by ??
-        local property_name, compare_value = stripped:match("^(.-)%?%?(.+)$")
-
-        -- Get current property value and compare
-        local current_value = mp.get_property(property_name)
-        local bool_result = current_value == compare_value
-        state.active = bool_result
-    end
-
     if  has_value(options.falsy_values, state.active) then
             state.active = false
     end
@@ -446,8 +447,8 @@ function ButtonManager:refresh_all_buttons()
     for button_name, data in pairs(self.property_manager.property_map.buttons) do
         local button = self.buttons[button_name]
         if button then
-            for _, data in ipairs(data) do
-                self:handle_substitution(button, data.prop, data)
+            for _, dataset in ipairs(data) do
+                self:handle_substitution(button, dataset.prop, dataset)
             end
             button:update_state(self.current_active_state)
         end
@@ -780,6 +781,7 @@ function ButtonManager:handle_substitution(button, caller, data)
     if caller ~= prop_name then return end
 
     
+    
     local state = button.states[state_name]
     local translated = button.states_translated[state_name]
     
@@ -807,6 +809,16 @@ function ButtonManager:handle_substitution(button, caller, data)
             table.insert(new_values, {pattern = raw_pattern, new_value = value})
         end
     end
+
+
+    for raw_pattern, placeholder in pairs(placeholders_active) do
+        if field_type == "active" and orig_field:find(raw_pattern) then
+            local property_name, compare_value = orig_field:match(raw_pattern)
+            local value = placeholder.fun(self.property_manager, property_name, compare_value)
+            table.insert(new_values, {pattern = raw_pattern, new_value = value})
+        end
+    end
+
     
     translated[field_type] = self.property_manager:insert_values_in_field(orig_field, new_values)
 end
@@ -1416,6 +1428,7 @@ mp.register_script_message('set-button', function(...)
 end)
 
 --TODO: instead of ?? and making it active, making the active default would be nicer.
+    -- special observer that swaps the states of the button?
 --TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
         -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
