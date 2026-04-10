@@ -93,8 +93,34 @@ local ButtonManager = {}
 local buttonmanager_setup_finished = false
 local state_map = {}
 
+
+
+local PATTERN = {
+    any_prop = "%[%[([^%]]+)%]%]",
+    compare = "^%[%[(.-)%?%?(.-)%]%]$",
+    swap_default = "^%[%[(.-)%?%!(.-)%]%]$",
+    custom_cycle = "^%[%[(.-)%!%!(.-)%]%]$",
+    any_active_op = "^(.-)%?[%?!]", -- optional if needed elsewhere
+    cycle = "%?%(c%)",
+    cycle_back = "%?%(c%-%)",
+    media_format = "%?%(f%)",
+    media_resolution = "%?%(p%)",
+}
+
+local ACTIVE_OP = {
+    compare = "??",
+    swap_default = "?!",
+    custom_active = "!!",
+}
+--- Keys into `placeholders_active` for each parsed op (same strings as PATTERN.compare / swap_default).
+local ACTIVE_PATTERN_BY_OP = {
+    [ACTIVE_OP.compare] = PATTERN.compare,
+    [ACTIVE_OP.swap_default] = PATTERN.swap_default,
+    [ACTIVE_OP.custom_active] = PATTERN.custom_active,
+}
+
 local placeholders = {
-    ["%?%(f%)"] = {
+    [PATTERN.media_format] = {
         type = "format",
         -- active props update the button on property change "file-loaded",
         props_active = {},
@@ -102,13 +128,13 @@ local placeholders = {
         props_passive = {"path","video-codec-name","video-format", "audio-codec-name"},
         fun = function(self) return self:getMediaFormatLabel() end,
     },
-    ["%?%(p%)"] = {
+    [PATTERN.media_resolution] = {
         type = "resolution", 
         props_active = {},
         props_passive = {"video-params/h","video-params/w"},
         fun = function(self) return self:getVideoResolutionLabel() end,
     },
-    ["%?%(c%)"] = {
+    [PATTERN.cycle] = {
         type = "state",
         props_active = {"user-data/ucm_currstate"},
         props_passive = {},
@@ -117,22 +143,39 @@ local placeholders = {
 }
 
 local placeholders_command = {
-    {pattern = "%?%(c%-%)", command = "script-message-to " .. script_name .. " cycle-back"},
-    {pattern = "%?%(c%)", command = "script-message-to " .. script_name .. " cycle"}
+    {pattern = PATTERN.cycle_back, command = "script-message-to " .. script_name .. " cycle-back"},
+    {pattern = PATTERN.cycle, command = "script-message-to " .. script_name .. " cycle"}
 }
 
--- placholder for active states porp??value compares the property against the value and returns true or false / makes the 
--- apear button active/inactive (white background)
--- NOTE: raw_pattern contains capture groups; gsub in insert_values_in_field
--- may behave unexpectedly if compare_value contains special pattern characters
--- (e.g. wasapi/{cc0329e7-16c2-4bd2-aef0-345408a33b9e}, this works but who knows if other things will)
+
 local placeholders_active = {
-    ["%[%[(.-)%?%?(.-)%]%]"] = {
+    -- placholder for active states porp??value compares the property against the value and returns true or false / makes the 
+    -- apear button active/inactive (white background)
+    -- NOTE: raw_pattern contains capture groups; gsub in insert_values_in_field
+    -- may behave unexpectedly if compare_value contains special pattern characters
+    -- (e.g. wasapi/{cc0329e7-16c2-4bd2-aef0-345408a33b9e}, this works but who knows if other things will)
+    [PATTERN.compare] = {
         fun = function(self, property_name, compare_value)
             local current_value = mp.get_property(property_name)
             return current_value == compare_value and "true" or "false"
         end
-    }
+    },
+    -- placeholder ?! only make the state active that prop?!value matches. therefore the active field is always false.
+    [PATTERN.swap_default] = {
+        fun = function(self, property_name, compare_value)
+            return "false"
+        end
+    },
+    [PATTERN.custom_cycle] = {
+        fun = function(self, property_name, cycle_values)
+            print("sassaassssssssssssssssssss", property_name, cycle_values)
+            local current_value = mp.get_property(property_name)
+            if current_value == "yes" then mp.set_property(property_name, "no") end
+            if current_value == "no" then mp.set_property(property_name, "yes") end
+            if not current_value then mp.set_property(property_name, "no") end
+            return current_value == cycle_values and "yes" or "no"
+        end
+    },
 }
 
 local messages = {
@@ -152,13 +195,34 @@ local messages = {
 
 
 --MARK: Utils
+local function parse_active_field_placeholder(expr)
+    if type(expr) ~= "string" then return nil end
+
+    local prop, value = expr:match(PATTERN.compare)
+    if prop then
+        return { op = ACTIVE_OP.compare, prop = prop, value = value }
+    end
+
+    prop, value = expr:match(PATTERN.swap_default)
+    if prop then
+        return { op = ACTIVE_OP.swap_default, prop = prop, value = value }
+    end
+
+    prop, value = expr:match(PATTERN.custom_cycle)
+    if prop then
+        return { op = ACTIVE_OP.custom_cycle, prop = prop, value = value }
+    end
+
+    return nil
+end
+
 -- Helper function to extract properties enclosed in double square brackets
 local function extract_properties(input_string)
     if not input_string then return nil end
     local results = {}
-    for match in input_string:gmatch("%[%[([^%]]+)%]%]") do
-        -- Remove everything after ?? (including ??)
-        local property_name = match:match("^(.-)%?%?") or match
+    for match in input_string:gmatch(PATTERN.any_prop) do
+        -- we need more action cuze for things like "[[audio-device?!auto]]" where the property has additional stuff
+        local property_name = match:match(PATTERN.any_active_op) or match
         table.insert(results, property_name)
     end
     return #results > 0 and results or nil
@@ -337,13 +401,13 @@ function Button:initialize_states(default_state_name)
             if (state[key] == nil or state[key] == "") and 
                not (key == "active" and extract_properties(fill_value)) then
                 state[key] = fill_value
-
             end
         end
 
         -- Initialize translated states
         self.states_translated[state_name] = shallow_copy(self.states[state_name])
     end
+
     -- show default
     self:update_state(self.default_state_name)
     return self
@@ -372,7 +436,6 @@ function Button:update_state(state_name)
     if state.hide == "true" then state.hide = true end
     if state.hide == "false" then state.hide = false end
 
-    --msg.error("Button name: ", self.name,"state_name: ", state_name, "tooltip ", state.tooltip)
 
     mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
         icon    = state.icon,
@@ -416,7 +479,7 @@ function ButtonManager:init()
         self:update_button(button_name)
     end)
 
-    -- NEW: Add the property change handler here
+    -- NEW: Add the property change handler here ???
     mp.register_script_message('property-changed', function(prop_name, value)
         local affected_buttons = self.property_manager.property_map.standard[prop_name] or {}
         for _, button_name in ipairs(affected_buttons) do
@@ -430,9 +493,36 @@ function ButtonManager:init()
         end
     end)
 
+    -- Switch default state when a property value matches
+    -- iterate through all states of the button and look where the property matches the value
+    mp.register_script_message('swap-default', function(value, button_name)
+        if not value then return end
+        
+        local button = self.buttons[button_name]
+        if not button or not button.states then return end
+        local button_states = button.states
+
+        -- We know a swap-default property changed, but not which state owns it.
+        -- Parse each state's active expression and promote the matching one.
+        for state_name, state in pairs(button_states) do
+            local parsed = parse_active_field_placeholder(state and state.active)
+            if parsed
+                and parsed.op == ACTIVE_OP.swap_default
+                and parsed.value == value
+            then
+                -- Stop after first successful swap, otherwise we can match again
+                -- against already-mutated table entries in this same iteration.
+                if self:swap_button_state_to_default(button_name, state_name, parsed.prop) then
+                    break
+                end
+            end
+        end
+    end)
+
     -- File-loaded event needed because some buttons use special placeholders (?(f), etc.)
     -- with passive properties that don't have automatic observers. Without this refresh,
     -- these buttons would show placeholder text instead of actual values.
+    --TODO: unhide buttons here like one with ?(f) that show the ugly placeholder until the file loaded?
     mp.register_event("file-loaded", function()
         -- Small timeout to make sure all properties are initialized by MPV
         mp.add_timeout(0.1, function()
@@ -474,6 +564,28 @@ function ButtonManager:manage_unique_states(button_states)
         end
     end
 
+    local function iterate_through_states(button, default_state, default_state_name)
+        for state in pairs(self.unique_states) do
+            if not button.states[state] then
+                mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
+                button.states[state] = shallow_copy(default_state)
+                -- we dont want the property for swap_default copied to cloned states, because they would
+                -- match the value like the default state would do and confuse the skript.
+                -- defaultstate.active = "[[audio-device?!auto]]",
+                -- clonedstate.active = "[[audio-device?!auto]]",
+                -- script would not know who to swap to and would probably do so at random.
+                if type(button.states[state].active) == "string" and 
+                        button.states[state].active:find(ACTIVE_OP.swap_default)
+                    then
+                    button.states[state].active = "false"
+                end
+                -- we don't want to copy the translated states but we want to have the same values always
+                -- shouldn't matter if we change a value in the default state or any other. they are always the same value
+                -- the translated_states are the values we actually give uosc to process.
+                button.states_translated[state] = button.states_translated[default_state_name]
+            end
+        end
+    end
     -- Always update ALL buttons with ALL unique states to prevent race conditions
     if options.fill_up_states and next(self.buttons) then 
         mp.msg.debug("Updating existing buttons with new states")
@@ -482,24 +594,11 @@ function ButtonManager:manage_unique_states(button_states)
             local default_state_name = button.default_state_name or self.default_state_name
             local default_state = button.states[default_state_name]
             local default_translated = button.states_translated[default_state_name]
-            
             if not default_state then
                 mp.msg.warn("No default state found for button " .. button.name .. ", skipping state fill-up")
-                -- the fuck is this shit.
-                goto continue
+            else
+                iterate_through_states(button, default_state, default_state_name)
             end
-            
-            for state in pairs(self.unique_states) do
-                if not button.states[state] then
-                    mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
-                    button.states[state] = shallow_copy(default_state)
-                    -- we don't want to copy the translated states but we want to have the same values always
-                    -- shouldn't matter if we change a value in the default state or any other. they are always the same value
-                    -- the translated_states are the values we actually give uosc to process.
-                    button.states_translated[state] = button.states_translated[default_state_name]
-                end
-            end
-            ::continue::
         end
     end
 end
@@ -594,6 +693,7 @@ end
 
 
 --MARK: update_button_data
+-- are the states really translated correctly?
 function ButtonManager:update_button_data(button_name, button_states)
 
     -- Update the button's states
@@ -601,9 +701,10 @@ function ButtonManager:update_button_data(button_name, button_states)
     button.states = button_states
     
     -- Re-translate properties and reinitialize
+    button.states_translated = {}
     local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
     button.states = processed_states
-    button.states_translated = {}
+    --button.states_translated = {}
     
     -- Reinitialize the button with new states
     -- if self.default_state_name is empty or nil, aprox a default
@@ -623,6 +724,64 @@ function ButtonManager:update_button_data(button_name, button_states)
     button:update_state(self.current_active_state)
 end
 
+--MARK: swap_button_states
+-- problem is when using inputevents im also tmp saving states?
+function ButtonManager:swap_button_state_to_default(button_name, state_that_should_be_default, prop_name)
+    local button = self.buttons[button_name]
+    if not button then
+        mp.msg.debug("swap_button_state_to_default: unknown button", button_name)
+        return false
+    end
+
+    local current_default = button.default_state_name or self.default_state_name
+    if not current_default or current_default == "" then
+        mp.msg.debug("swap_button_state_to_default: no default state for button", button_name)
+        return false
+    end
+
+    if not state_that_should_be_default or state_that_should_be_default == "" then
+        return false
+    end
+
+    if state_that_should_be_default == current_default then
+        return false
+    end
+
+    local states = button.states or {}
+    local translated = button.states_translated or {}
+    local default_state = states[current_default]
+    local target_state = states[state_that_should_be_default]
+    if not default_state or not target_state then
+        mp.msg.debug(
+            "swap_button_state_to_default: missing states",
+            button_name,
+            current_default,
+            state_that_should_be_default
+        )
+        return false
+    end
+
+    -- Keep names stable (`state_1`, `state_2`, ...) and swap the payload.
+    states[current_default], states[state_that_should_be_default] = target_state, default_state
+    translated[current_default], translated[state_that_should_be_default] =
+        translated[state_that_should_be_default], translated[current_default]
+
+    if self.current_active_state == current_default then
+        button.active_state = translated[current_default] or states[current_default]
+    end
+
+    -- this keeps the icon stable otherwise the previous default icon would show up for a short time
+    button:update_state(button.default_state_name)
+    mp.msg.debug(
+        "swap_button_state_to_default:",
+        button_name,
+        "promoted",
+        state_that_should_be_default,
+        "for",
+        prop_name or ""
+    )
+    return true
+end
 
 --MARK: set_button_state
 function ButtonManager:set_button_state(state_name)
@@ -810,15 +969,16 @@ function ButtonManager:handle_substitution(button, caller, data)
         end
     end
 
-
-    for raw_pattern, placeholder in pairs(placeholders_active) do
-        if field_type == "active" and orig_field:find(raw_pattern) then
-            local property_name, compare_value = orig_field:match(raw_pattern)
-            local value = placeholder.fun(self.property_manager, property_name, compare_value)
+    -- substitute for placeholders ?? or ?!
+    local parsed = parse_active_field_placeholder(orig_field)
+    if field_type == "active" and parsed then
+        local raw_pattern = ACTIVE_PATTERN_BY_OP[parsed.op]
+        local placeholder = placeholders_active[raw_pattern]
+        if placeholder then
+            local value = placeholder.fun(self.property_manager, parsed.prop, parsed.value)
             table.insert(new_values, {pattern = raw_pattern, new_value = value})
         end
     end
-
     
     translated[field_type] = self.property_manager:insert_values_in_field(orig_field, new_values)
 end
@@ -844,6 +1004,7 @@ function PropertyManager.new()
         field_types = {},   
         buttons     = {},     
     }
+    self.swap_observers = {}
 
     mp.register_script_message('cycle-prop-values', function(prop, ...)
         local values = {...}
@@ -898,8 +1059,14 @@ function PropertyManager:track_states_properties(button_name, states)
                     end
                 end
             end
-            --TODO: Same for [[prop??*]]
-
+            --TODO: [[prop?!*]] use function
+            local parsed = parse_active_field_placeholder(field)
+            if field_type == "active" and parsed then
+                local property_name = parsed.prop
+                --if property_name then
+                self:register_swap_property(property_name, button_name)
+                --end
+            end
         end
     end
 end
@@ -913,6 +1080,20 @@ function PropertyManager:register_property(prop_name)
     end)
 end
 
+--MARK: swap_prop
+-- Observes a property and promotes the matching state to default (front) when
+-- its compare value becomes true. Used for mutually exclusive states like audio
+-- device selection, where the currently active state should appear first rather
+-- than just be highlighted.
+function PropertyManager:register_swap_property(prop_name, button_name)
+    if self.swap_observers[prop_name] then return end
+    self.swap_observers[prop_name] = true
+    mp.observe_property(prop_name, "string", function(_, value)
+        if not value then return end
+        mp.commandv('script-message-to', script_name, 'swap-default', value, button_name)
+    end)
+end
+
 function PropertyManager:insert_values_in_field(original, new_values)
     local result = original
     for _, new_value in ipairs(new_values) do
@@ -922,6 +1103,7 @@ function PropertyManager:insert_values_in_field(original, new_values)
 end
 
 --MARK: transl_btn_props
+-- only selupdating props?
 function PropertyManager:translate_button_properties(button_name, button_states)
     for _, state in pairs(button_states) do
         if type(state) ~= "table" then break end
@@ -938,9 +1120,6 @@ function PropertyManager:translate_button_properties(button_name, button_states)
                 local props = extract_properties(state[field])
                 if props then
                     state[field], state.command = self:process_selfupdating_props(state[field], props, state.command)
-                    if field == "active" then
-                        --state["active"] = self:process_customcompare_props(state["active"])
-                    end
                 end
             end
         end
@@ -950,7 +1129,9 @@ end
 
 --MARK: cust props
 function PropertyManager:process_selfupdating_props(field_as_string, properties, commands)
-
+    --TODO: check if we limit it to active. process_selfupdating_props seems likte it should be also for other props
+    -- probably works like this but is misleading with active in name.
+    -- maybe we can throw this all in the function of the pattern???
     local result = field_as_string
     local command_parts = {}
     
@@ -961,8 +1142,12 @@ function PropertyManager:process_selfupdating_props(field_as_string, properties,
 
     for _, prop in ipairs(properties) do
         -- custom cycle for props
-        if prop:match("^user%-data/") and prop:find("%?") then
-            local property_name, cycle_values = unpack(split(prop, "?"))
+        local parsed = parse_active_field_placeholder("[[" .. prop .. "]]")
+        if parsed and parsed.op == ACTIVE_OP.custom_cycle then
+        --if prop:match("^user%-data/") and prop:find("%!%!") then
+            local property_name, cycle_values = parsed.prop, parsed.value
+            local proptery_build = "user-data/" .. property_name
+            --local property_name, cycle_values = unpack(split(prop, "!!"))
             local initial_value = split(cycle_values, " ")[1]
             
             -- Add separator if we already have commands
@@ -973,39 +1158,18 @@ function PropertyManager:process_selfupdating_props(field_as_string, properties,
             table.insert(command_parts, string.format(
                 [[script-message-to %s cycle-prop-values %s %s]],
                 script_name,
-                property_name,
+                proptery_build,
                 cycle_values
             ))
  
-            result = result:gsub("%[%[.-%]%]", "[[" .. property_name .. "]]")
-            mp.set_property_native(property_name, initial_value)
+            result = result:gsub("%[%[.-%]%]", "[[" .. proptery_build .. "]]")
+            mp.set_property_native(proptery_build, initial_value)
         end
     end
     
     return result, table.concat(command_parts)
 end
 
---TODO: make proper
-function PropertyManager:process_customcompare_props(field_as_string)
-    
-    -- Remove [[ and ]] from beginning and end
-    local stripped = field_as_string:gsub("^%[%[", ""):gsub("%]%]$", "")
-
-    
-    -- Split by ??
-    local property_name, compare_value = stripped:match("^(.-)%?%?(.+)$")
-    
-    if not property_name or not compare_value then
-
-        return false
-    end
-
-    -- Get current property value and compare
-    local current_value = mp.get_property(property_name)
-    local bool_result = current_value == compare_value
-    
-    return bool_result
-end
 
 --MARK: res_lable
 function PropertyManager:getVideoResolutionLabel()
@@ -1427,6 +1591,7 @@ mp.register_script_message('set-button', function(...)
     return true
 end)
 
+--TODO: hide buttons with passive props until file loaded observer?
 --TODO: instead of ?? and making it active, making the active default would be nicer.
     -- special observer that swaps the states of the button?
 --TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
