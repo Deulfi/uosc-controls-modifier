@@ -99,33 +99,32 @@ local PATTERN = {
     any_prop = "%[%[([^%]]+)%]%]",
     compare = "^%[%[(.-)%?%?(.-)%]%]$",
     swap_default = "^%[%[(.-)%?%!(.-)%]%]$",
-    custom_cycle = "^%[%[(.-)%!%!(.-)%]%]$",
-    any_active_op = "^(.-)%?[%?!]", -- optional if needed elsewhere
-    cycle = "%?%(c%)",
-    cycle_back = "%?%(c%-%)",
+    value_cycle = "^%[%[(.-)%!%!(.-)%]%]$",
+    any_complex_op = "^(.-)%?[%?!]",
+    state_cycle = "%?%(c%)",
+    state_cycle_back = "%?%(c%-%)",
     media_format = "%?%(f%)",
     media_resolution = "%?%(p%)",
 }
 
-local ACTIVE_OP = {
+local COMPLEX_OP = {
     compare = "??",
     swap_default = "?!",
-    custom_active = "!!",
+    value_cycle = "!!",
 }
---- Keys into `placeholders_active` for each parsed op (same strings as PATTERN.compare / swap_default).
-local ACTIVE_PATTERN_BY_OP = {
-    [ACTIVE_OP.compare] = PATTERN.compare,
-    [ACTIVE_OP.swap_default] = PATTERN.swap_default,
-    [ACTIVE_OP.custom_active] = PATTERN.custom_active,
+--- Keys into `placeholders_complex` for each parsed op (same strings as PATTERN.compare / swap_default).
+local COMPLEX_PATTERN_BY_OP = {
+    [COMPLEX_OP.compare] = PATTERN.compare,
+    [COMPLEX_OP.swap_default] = PATTERN.swap_default,
+    [COMPLEX_OP.value_cycle] = PATTERN.value_cycle,
 }
 
+-- Pattern returns the visual data that end up on the buttons
 local placeholders = {
     [PATTERN.media_format] = {
         type = "format",
-        -- active props update the button on property change "file-loaded",
         props_active = {},
-        -- passive props only update the value on property change
-        props_passive = {"path","video-codec-name","video-format", "audio-codec-name"},
+        props_passive = {"path", "video-format", "video-codec-name", "video-codec", "audio-codec-name"},
         fun = function(self) return self:getMediaFormatLabel() end,
     },
     [PATTERN.media_resolution] = {
@@ -134,7 +133,7 @@ local placeholders = {
         props_passive = {"video-params/h","video-params/w"},
         fun = function(self) return self:getVideoResolutionLabel() end,
     },
-    [PATTERN.cycle] = {
+    [PATTERN.state_cycle] = {
         type = "state",
         props_active = {"user-data/ucm_currstate"},
         props_passive = {},
@@ -143,12 +142,12 @@ local placeholders = {
 }
 
 local placeholders_command = {
-    {pattern = PATTERN.cycle_back, command = "script-message-to " .. script_name .. " cycle-back"},
-    {pattern = PATTERN.cycle, command = "script-message-to " .. script_name .. " cycle"}
+    {pattern = PATTERN.state_cycle_back, command = "script-message-to " .. script_name .. " cycle-back"},
+    {pattern = PATTERN.state_cycle, command = "script-message-to " .. script_name .. " cycle"}
 }
 
 
-local placeholders_active = {
+local placeholders_complex = {
     -- placholder for active states porp??value compares the property against the value and returns true or false / makes the 
     -- apear button active/inactive (white background)
     -- NOTE: raw_pattern contains capture groups; gsub in insert_values_in_field
@@ -166,15 +165,11 @@ local placeholders_active = {
             return "false"
         end
     },
-    [PATTERN.custom_cycle] = {
-        fun = function(self, property_name, cycle_values)
-            print("sassaassssssssssssssssssss", property_name, cycle_values)
-            local current_value = mp.get_property(property_name)
-            if current_value == "yes" then mp.set_property(property_name, "no") end
-            if current_value == "no" then mp.set_property(property_name, "yes") end
-            if not current_value then mp.set_property(property_name, "no") end
-            return current_value == cycle_values and "yes" or "no"
-        end
+    [PATTERN.value_cycle] = {
+        -- Command merge lives in `ensure_value_cycle_initialized` (init + handle_substitution); this is display only.
+        fun = function(self, property_name, _)
+            return self:value_cycle_display_value(property_name)
+        end,
     },
 }
 
@@ -195,22 +190,24 @@ local messages = {
 
 
 --MARK: Utils
-local function parse_active_field_placeholder(expr)
+
+
+local function parse_complex_field_placeholder(expr)
     if type(expr) ~= "string" then return nil end
 
     local prop, value = expr:match(PATTERN.compare)
     if prop then
-        return { op = ACTIVE_OP.compare, prop = prop, value = value }
+        return { op = COMPLEX_OP.compare, prop = prop, value = value }
     end
 
     prop, value = expr:match(PATTERN.swap_default)
     if prop then
-        return { op = ACTIVE_OP.swap_default, prop = prop, value = value }
+        return { op = COMPLEX_OP.swap_default, prop = prop, value = value }
     end
 
-    prop, value = expr:match(PATTERN.custom_cycle)
+    prop, value = expr:match(PATTERN.value_cycle)
     if prop then
-        return { op = ACTIVE_OP.custom_cycle, prop = prop, value = value }
+        return { op = COMPLEX_OP.value_cycle, prop = prop, value = value }
     end
 
     return nil
@@ -222,7 +219,7 @@ local function extract_properties(input_string)
     local results = {}
     for match in input_string:gmatch(PATTERN.any_prop) do
         -- we need more action cuze for things like "[[audio-device?!auto]]" where the property has additional stuff
-        local property_name = match:match(PATTERN.any_active_op) or match
+        local property_name = match:match(PATTERN.any_complex_op) or match
         table.insert(results, property_name)
     end
     return #results > 0 and results or nil
@@ -244,6 +241,10 @@ local function split(input_string, primary_separator, key_value_separator)
     end
     
     return result
+end
+
+local function escape_lua_pattern(s)
+    return (s:gsub("([%^$()%%.%[%]*+%-?])", "%%%1"))
 end
 
 --- Finds the index of a value in a table
@@ -431,11 +432,13 @@ function Button:update_state(state_name)
     end
 
     if state.badge   == "nil" then state.badge   = nil end
+    if state.badge   == "" then state.badge   = nil end
     if state.tooltip == "nil" then state.tooltip = nil end
 
     if state.hide == "true" then state.hide = true end
     if state.hide == "false" then state.hide = false end
 
+    if state.hide == false and not state.badge and not (state.icon or state.icon == "") then state.hide = true end
 
     mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
         icon    = state.icon,
@@ -505,9 +508,9 @@ function ButtonManager:init()
         -- We know a swap-default property changed, but not which state owns it.
         -- Parse each state's active expression and promote the matching one.
         for state_name, state in pairs(button_states) do
-            local parsed = parse_active_field_placeholder(state and state.active)
+            local parsed = parse_complex_field_placeholder(state and state.active)
             if parsed
-                and parsed.op == ACTIVE_OP.swap_default
+                and parsed.op == COMPLEX_OP.swap_default
                 and parsed.value == value
             then
                 -- Stop after first successful swap, otherwise we can match again
@@ -575,7 +578,7 @@ function ButtonManager:manage_unique_states(button_states)
                 -- clonedstate.active = "[[audio-device?!auto]]",
                 -- script would not know who to swap to and would probably do so at random.
                 if type(button.states[state].active) == "string" and 
-                        button.states[state].active:find(ACTIVE_OP.swap_default)
+                        button.states[state].active:find(COMPLEX_OP.swap_default)
                     then
                     button.states[state].active = "false"
                 end
@@ -669,8 +672,9 @@ function ButtonManager:aprox_default(fallback_states)
 end
 
 function ButtonManager:initialize_button(button_name, button_states)
-    local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
-    
+    --local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
+    local processed_states = self.property_manager:expand_selfupdating_placeholders(button_states)
+
     local button = Button.new(button_name, processed_states)
     -- if self.default_state_name is empty or nil, aprox a default
     local state_name = self.default_state_name
@@ -702,7 +706,7 @@ function ButtonManager:update_button_data(button_name, button_states)
     
     -- Re-translate properties and reinitialize
     button.states_translated = {}
-    local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
+    local processed_states = self.property_manager:expand_selfupdating_placeholders(button_states)
     button.states = processed_states
     --button.states_translated = {}
     
@@ -965,16 +969,27 @@ function ButtonManager:handle_substitution(button, caller, data)
     for raw_pattern, placeholder in pairs(placeholders) do
         if orig_field:match(raw_pattern) then
             local value = placeholder.fun(self.property_manager) or ""
+
             table.insert(new_values, {pattern = raw_pattern, new_value = value})
         end
     end
 
-    -- substitute for placeholders ?? or ?!
-    local parsed = parse_active_field_placeholder(orig_field)
-    if field_type == "active" and parsed then
-        local raw_pattern = ACTIVE_PATTERN_BY_OP[parsed.op]
-        local placeholder = placeholders_active[raw_pattern]
-        if placeholder then
+    -- substitute for placeholders ?? or ?! etc
+    local parsed = parse_complex_field_placeholder(orig_field)
+    local raw_pattern = parsed and COMPLEX_PATTERN_BY_OP[parsed.op] or nil
+    local placeholder = raw_pattern and placeholders_complex[raw_pattern] or nil
+    if parsed and placeholder then
+        if parsed.op == COMPLEX_OP.value_cycle then
+            -- Attached at expand; idempotent if substitution runs before expand.
+            state.command = self.property_manager:ensure_value_cycle_initialized(
+                parsed.prop,
+                parsed.value,
+                state.command
+            )
+        end
+        local use_complex = (field_type == "active" and parsed.op ~= COMPLEX_OP.value_cycle)
+            or parsed.op == COMPLEX_OP.value_cycle
+        if use_complex then
             local value = placeholder.fun(self.property_manager, parsed.prop, parsed.value)
             table.insert(new_values, {pattern = raw_pattern, new_value = value})
         end
@@ -1005,6 +1020,8 @@ function PropertyManager.new()
         buttons     = {},     
     }
     self.swap_observers = {}
+    --- Gate for value_cycle: one-time append of cycle script-message + native init per (user-data key, cycle list).
+    self._value_cycle_initialized = {}
 
     mp.register_script_message('cycle-prop-values', function(prop, ...)
         local values = {...}
@@ -1059,13 +1076,11 @@ function PropertyManager:track_states_properties(button_name, states)
                     end
                 end
             end
-            --TODO: [[prop?!*]] use function
-            local parsed = parse_active_field_placeholder(field)
-            if field_type == "active" and parsed then
+
+            local parsed = parse_complex_field_placeholder(field)
+            if field_type == "active" and parsed and parsed.op == COMPLEX_OP.swap_default then
                 local property_name = parsed.prop
-                --if property_name then
                 self:register_swap_property(property_name, button_name)
-                --end
             end
         end
     end
@@ -1102,75 +1117,98 @@ function PropertyManager:insert_values_in_field(original, new_values)
     return result
 end
 
---MARK: transl_btn_props
--- only selupdating props?
-function PropertyManager:translate_button_properties(button_name, button_states)
+--MARK: value_cycle
+--- Gated once per (user-data key, cycle list): native default + `cycle-prop-values` script-message merged into `command`.
+function PropertyManager:ensure_value_cycle_initialized(short_prop, cycle_values, command)
+    local ud_prop = "user-data/" .. short_prop
+    local gate_key = ud_prop .. "\0" .. (cycle_values or "")
+
+    local command_parts = {}
+    if command and command ~= "" and command ~= "nil" then
+        table.insert(command_parts, command)
+    end
+
+    if not self._value_cycle_initialized[gate_key] then
+        self._value_cycle_initialized[gate_key] = true
+
+        local initial_value = split(cycle_values, " ")
+        initial_value = initial_value and initial_value[1]
+        if initial_value then
+            mp.set_property_native(ud_prop, initial_value)
+        end
+
+        if #command_parts > 0 then
+            table.insert(command_parts, ";")
+        end
+        table.insert(command_parts, string.format(
+            [[script-message-to %s cycle-prop-values %s %s]],
+            script_name,
+            ud_prop,
+            cycle_values
+        ))
+    end
+
+    return table.concat(command_parts)
+end
+
+--- Current `user-data/<short_prop>` for substitution (after expand, normal updates use the `[[user-data/…]]` path).
+function PropertyManager:value_cycle_display_value(short_prop)
+    local ud_prop = "user-data/" .. short_prop
+    local cur = mp.get_property_native(ud_prop)
+    if cur == nil then
+        cur = mp.get_property(ud_prop)
+    end
+    return tostring(cur or "")
+end
+
+--MARK: selfupdating prop
+--- Init-time expansion for self-updating placeholders (value_cycle, add new kinds here).
+function PropertyManager:expand_selfupdating_placeholders(button_states)
+    local function rewrite_customprop_in_field(field_str, short_prop, cycle_values, operator)
+        local ud_prop = "user-data/" .. short_prop
+        local needle = "[[" .. short_prop .. operator .. cycle_values .. "]]"
+        local escaped = escape_lua_pattern(needle)
+        local rewritten = field_str:gsub(escaped, "[[" .. ud_prop .. "]]", 1)
+        if rewritten == field_str then
+            rewritten = field_str:gsub("%[%[.-%]%]", "[[" .. ud_prop .. "]]", 1)
+        end
+        return rewritten
+    end
+
     for _, state in pairs(button_states) do
         if type(state) ~= "table" then break end
-        
-        -- Translate command placeholders
+
         if state.command then
-            for _, placeholder in ipairs(placeholders_command) do
-                state.command = state.command:gsub(placeholder.pattern, placeholder.command)
+            for _, ph in ipairs(placeholders_command) do
+                state.command = state.command:gsub(ph.pattern, ph.command)
             end
         end
-        
-        for _, field in ipairs({'active', 'badge', 'tooltip'}) do
-            if state[field] and type(state[field]) == "string" then
-                local props = extract_properties(state[field])
+
+        -- for custom cycle props, like shuffle (COMPLEX_OP.value_cycle)
+        for _, field_key in ipairs({ "active", "badge", "tooltip" }) do 
+            local field = state[field_key]
+            if type(field) == "string" then
+                local props = extract_properties(field)
                 if props then
-                    state[field], state.command = self:process_selfupdating_props(state[field], props, state.command)
+                    for _, prop in ipairs(props) do
+                        local parsed = parse_complex_field_placeholder("[[" .. prop .. "]]")
+                        local operator = COMPLEX_OP.value_cycle
+                        if parsed and parsed.op == operator then
+                            state.command = self:ensure_value_cycle_initialized(
+                                parsed.prop,
+                                parsed.value,
+                                state.command
+                            )
+                            field = rewrite_customprop_in_field(field, parsed.prop, parsed.value, operator)
+                            state[field_key] = field
+                        end
+                    end
                 end
             end
         end
     end
     return button_states
 end
-
---MARK: cust props
-function PropertyManager:process_selfupdating_props(field_as_string, properties, commands)
-    --TODO: check if we limit it to active. process_selfupdating_props seems likte it should be also for other props
-    -- probably works like this but is misleading with active in name.
-    -- maybe we can throw this all in the function of the pattern???
-    local result = field_as_string
-    local command_parts = {}
-    
-    -- Add initial commands if they exist
-    if commands and commands ~= "" and commands ~= "nil" then
-        table.insert(command_parts, commands)
-    end
-
-    for _, prop in ipairs(properties) do
-        -- custom cycle for props
-        local parsed = parse_active_field_placeholder("[[" .. prop .. "]]")
-        if parsed and parsed.op == ACTIVE_OP.custom_cycle then
-        --if prop:match("^user%-data/") and prop:find("%!%!") then
-            local property_name, cycle_values = parsed.prop, parsed.value
-            local proptery_build = "user-data/" .. property_name
-            --local property_name, cycle_values = unpack(split(prop, "!!"))
-            local initial_value = split(cycle_values, " ")[1]
-            
-            -- Add separator if we already have commands
-            if #command_parts > 0 then
-                table.insert(command_parts, ";")
-            end
-            
-            table.insert(command_parts, string.format(
-                [[script-message-to %s cycle-prop-values %s %s]],
-                script_name,
-                proptery_build,
-                cycle_values
-            ))
- 
-            result = result:gsub("%[%[.-%]%]", "[[" .. proptery_build .. "]]")
-            mp.set_property_native(proptery_build, initial_value)
-        end
-    end
-    
-    return result, table.concat(command_parts)
-end
-
-
 --MARK: res_lable
 function PropertyManager:getVideoResolutionLabel()
     local width = self.property_map.values["video-params/w"] or ""
@@ -1189,7 +1227,7 @@ function PropertyManager:getMediaFormatLabel()
     local path = self.property_map.values["path"]
     local extension = path and path:match("%.([^%.]+)$")
 
-    if not path and not extension then return "idle" end
+    if not path and not extension then return nil end
 
     if extension and options.video_types:find(extension) then
         return self.property_map.values["video-format"] or self.property_map.values["video-codec-name"]
