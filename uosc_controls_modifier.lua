@@ -427,18 +427,13 @@ function Button:update_state(state_name)
     
     self.active_state = state
  
-    if  has_value(options.falsy_values, state.active) then
-            state.active = false
-    end
-
-    if state.badge   == "nil" then state.badge   = nil end
-    if state.badge   == "" then state.badge   = nil end
-    if state.tooltip == "nil" then state.tooltip = nil end
-
+    if has_value(options.falsy_values, state.active) then state.active = false end
+    if has_value(options.falsy_values, state.badge) then state.badge = nil end
+    if has_value(options.falsy_values, state.hide) then state.hide = nil end
+    if has_value(options.falsy_values, state.tooltip) then state.tooltip = nil end
     if state.hide == "true" then state.hide = true end
-    if state.hide == "false" then state.hide = false end
+    if state.hide == false and not state.badge and not has_value(options.falsy_values, state.icon) then state.hide = true end
 
-    if state.hide == false and not state.badge and not (state.icon or state.icon == "") then state.hide = true end
 
     mp.commandv('script-message-to', 'uosc', 'set-button', self.name, mp.utils.format_json({
         icon    = state.icon,
