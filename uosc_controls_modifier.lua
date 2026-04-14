@@ -79,6 +79,7 @@ local options = {
 
   fill_up_states = true,
   falsy_values = { "", "no", "false", "0", false, nil, 0, "0", "nil" },
+  supress_input_warnings_key = 'ctrl+alt+shift+ü',
 }
 local mp = require "mp"
 mp.utils = require "mp.utils"
@@ -166,7 +167,6 @@ local placeholders_complex = {
         end
     },
     [PATTERN.value_cycle] = {
-        -- Command merge lives in `ensure_value_cycle_initialized` (init + handle_substitution); this is display only.
         fun = function(self, property_name, _)
             return self:value_cycle_display_value(property_name)
         end,
@@ -194,6 +194,8 @@ local messages = {
 
 local function parse_complex_field_placeholder(expr)
     if type(expr) ~= "string" then return nil end
+
+
 
     local prop, value = expr:match(PATTERN.compare)
     if prop then
@@ -414,6 +416,36 @@ function Button:initialize_states(default_state_name)
     return self
 end
 
+--- When fill_up_states: add missing state *fields* (clone default fields) for every name.
+--- Complements initialize_states, which fills empty *fields* inside each existing row.
+function Button:add_missing_state_fields(deduped_state_names, manager_default_state_name)
+    if not options.fill_up_states or not deduped_state_names then
+        return
+    end
+    local default_state_name = self.default_state_name or manager_default_state_name
+    local default_state = default_state_name and self.states[default_state_name]
+    if not default_state then
+        return
+    end
+    for state_name in pairs(deduped_state_names) do
+        local state = self.states[state_name]
+        if not state then
+            mp.msg.trace("Adding state " .. state_name .. " to button " .. self.name)
+            state = shallow_copy(default_state) or {}
+            self.states_translated[state_name] = self.states_translated[default_state_name]
+
+            -- we need to ensure that swap_default is not cloned, because each value of
+            -- the special prop [[prop?!value]] must be unique to a state for the later 
+            -- processing to find the correct state.
+            if type(state.active) == "string" and
+            state.active:find(COMPLEX_OP.swap_default) then
+                state.active = "false"
+                self.states_translated[state_name].active = "false"
+            end
+        end
+    end
+end
+
 --MARK: update_state
 function Button:update_state(state_name)
     local state = self.states_translated and self.states_translated[state_name] or self.active_state
@@ -457,70 +489,28 @@ function ButtonManager.new()
     self.property_manager     = PropertyManager.new()
     self.buttons              = {}
     self.state_map            = {}
-    self.unique_states        = {}
+    self.deduped_state_names  = {}
     self.current_active_state = ""
     self.default_state_name   = ""
     
     return self
 end
 
-function ButtonManager:init()
-    self.state_map = options.state_map
+function ButtonManager:init(state_map)
+    self.state_map = state_map or options.state_map
     self.default_state_name = self.state_map['default']
     self.current_active_state = self.default_state_name
     
+    self:parse_new_states()
     self:initialize_buttons()
-    self:manage_unique_states()
     self:register_default_handlers()
+    self:register_script_messages()
 
-    mp.register_script_message('update-button', function(button_name)
-        self:update_button(button_name)
-    end)
 
-    -- NEW: Add the property change handler here ???
-    mp.register_script_message('property-changed', function(prop_name, value)
-        local affected_buttons = self.property_manager.property_map.standard[prop_name] or {}
-        for _, button_name in ipairs(affected_buttons) do
-            local button = self.buttons[button_name]
-            if button then
-                for _, data in ipairs(self.property_manager.property_map.buttons[button_name] or {}) do
-                    self:handle_substitution(button, prop_name, data)
-                end
-                button:update_state(self.current_active_state)
-            end
-        end
-    end)
 
-    -- Switch default state when a property value matches
-    -- iterate through all states of the button and look where the property matches the value
-    mp.register_script_message('swap-default', function(value, button_name)
-        if not value then return end
-        
-        local button = self.buttons[button_name]
-        if not button or not button.states then return end
-        local button_states = button.states
-
-        -- We know a swap-default property changed, but not which state owns it.
-        -- Parse each state's active expression and promote the matching one.
-        for state_name, state in pairs(button_states) do
-            local parsed = parse_complex_field_placeholder(state and state.active)
-            if parsed
-                and parsed.op == COMPLEX_OP.swap_default
-                and parsed.value == value
-            then
-                -- Stop after first successful swap, otherwise we can match again
-                -- against already-mutated table entries in this same iteration.
-                if self:swap_button_state_to_default(button_name, state_name, parsed.prop) then
-                    break
-                end
-            end
-        end
-    end)
-
-    -- File-loaded event needed because some buttons use special placeholders (?(f), etc.)
     -- with passive properties that don't have automatic observers. Without this refresh,
     -- these buttons would show placeholder text instead of actual values.
-    --TODO: unhide buttons here like one with ?(f) that show the ugly placeholder until the file loaded?
+    -- TODO: check is this works as commented.
     mp.register_event("file-loaded", function()
         -- Small timeout to make sure all properties are initialized by MPV
         mp.add_timeout(0.1, function()
@@ -535,83 +525,47 @@ function ButtonManager:refresh_all_buttons()
     for button_name, data in pairs(self.property_manager.property_map.buttons) do
         local button = self.buttons[button_name]
         if button then
+            --TODO: what data?
             for _, dataset in ipairs(data) do
-                self:handle_substitution(button, dataset.prop, dataset)
+                self:handle_substitution(button, dataset)
             end
             button:update_state(self.current_active_state)
         end
     end
 end
 
---MARK: manage uniques
-function ButtonManager:manage_unique_states(button_states)
-    local source = button_states or options.buttons
-    local new_states = {}
-
-    -- Extract states from either button_states or options.buttons
+--MARK: shared state names
+--- Merge state keys from `options.buttons` or a partial `{ [name] = { states = ... } }` update; register
+--- handlers for newly seen keys; pad every existing button with missing row when fill_up_states is on.
+function ButtonManager:parse_new_states(partial_buttons)
+    local source = partial_buttons or options.buttons
     for _, button_data in pairs(source) do
-        local states_to_check = button_states and button_data.states or button_data
+        local states_to_check = partial_buttons and button_data.states or button_data
         for state in pairs(states_to_check) do
-            if not self.unique_states[state] then
-                mp.msg.debug("Found new state: " .. state)
-                new_states[state] = true
-                -- Register message handler for the new state
+            if not self.deduped_state_names[state] then
+                mp.msg.debug("Discovered shared state name: " .. state)
                 self:register_message_handler(state)
             end
-            self.unique_states[state] = true
+            self.deduped_state_names[state] = true
         end
     end
 
-    local function iterate_through_states(button, default_state, default_state_name)
-        for state in pairs(self.unique_states) do
-            if not button.states[state] then
-                mp.msg.debug("Adding state " .. state .. " to button " .. button.name)
-                button.states[state] = shallow_copy(default_state)
-                -- we dont want the property for swap_default copied to cloned states, because they would
-                -- match the value like the default state would do and confuse the skript.
-                -- defaultstate.active = "[[audio-device?!auto]]",
-                -- clonedstate.active = "[[audio-device?!auto]]",
-                -- script would not know who to swap to and would probably do so at random.
-                if type(button.states[state].active) == "string" and 
-                        button.states[state].active:find(COMPLEX_OP.swap_default)
-                    then
-                    button.states[state].active = "false"
-                end
-                -- we don't want to copy the translated states but we want to have the same values always
-                -- shouldn't matter if we change a value in the default state or any other. they are always the same value
-                -- the translated_states are the values we actually give uosc to process.
-                button.states_translated[state] = button.states_translated[default_state_name]
-            end
-        end
-    end
-    -- Always update ALL buttons with ALL unique states to prevent race conditions
-    if options.fill_up_states and next(self.buttons) then 
-        mp.msg.debug("Updating existing buttons with new states")
-        for index, button in pairs(self.buttons) do
-            -- Get the default state for this button
-            local default_state_name = button.default_state_name or self.default_state_name
-            local default_state = button.states[default_state_name]
-            local default_translated = button.states_translated[default_state_name]
-            if not default_state then
-                mp.msg.warn("No default state found for button " .. button.name .. ", skipping state fill-up")
-            else
-                iterate_through_states(button, default_state, default_state_name)
-            end
+    -- if on: a clone of the default should be shown
+    -- if off: the last shown should still show.
+    if options.fill_up_states and next(self.buttons) then
+        mp.msg.trace("Padding", self.name, "buttons with missing shared state rows")    
+        for _, button in pairs(self.buttons) do
+            button:add_missing_state_fields (self.deduped_state_names, self.default_state_name)
         end
     end
 end
 
 
---MARK: init buttons
-function ButtonManager:initialize_buttons()
-    for button_name, button_states in pairs(options.buttons) do
-        self:initialize_button(button_name, button_states)
-    end
-end
+--MARK: aprox_default
 -- better than nothing
 function ButtonManager:aprox_default(fallback_states)
     local state_count = {}
-    local source = nil
+    local source = {}
     local source_name = ""
     
     -- Try self.buttons first
@@ -625,7 +579,7 @@ function ButtonManager:aprox_default(fallback_states)
         end
     -- Try options.buttons
     elseif options.buttons and next(options.buttons) then
-        source = options.buttons
+        source = options.buttons or {}
         source_name = "options.buttons"
         for button_name, button_states in pairs(source) do
             for state_name in pairs(button_states) do
@@ -666,60 +620,55 @@ function ButtonManager:aprox_default(fallback_states)
     return most_frequent_state
 end
 
-function ButtonManager:initialize_button(button_name, button_states)
-    --local processed_states = self.property_manager:translate_button_properties(button_name, button_states)
-    local processed_states = self.property_manager:expand_selfupdating_placeholders(button_states)
-
-    local button = Button.new(button_name, processed_states)
-    -- if self.default_state_name is empty or nil, aprox a default
+--MARK: init buttons
+--- expand_selfupdating_placeholders + default state + initialize_states + track_states_properties (shared path).
+function ButtonManager:sync_button_states_from_raw(button, button_name, raw_states)
+    local processed = self.property_manager:expand_selfupdating_placeholders(raw_states)
+    button.states = processed
+    button.states_translated = {}
     local state_name = self.default_state_name
     if not state_name or state_name == "" then
-        state_name = self:aprox_default(button_states)
+        state_name = self:aprox_default(processed)
     end
     button:initialize_states(state_name)
+    button:add_missing_state_fields(self.deduped_state_names, self.default_state_name)
     self.property_manager:track_states_properties(button_name, button.states)
-    
+end
+
+function ButtonManager:initialize_buttons()
+    for button_name, button_states in pairs(options.buttons) do
+        self:initialize_button(button_name, button_states)
+    end
+end
+
+function ButtonManager:initialize_button(button_name, button_states)
+    local button = Button.new(button_name, {})
+    self:sync_button_states_from_raw(button, button_name, button_states)
     self.buttons[button_name] = button
     msg.debug("Button added:", button_name)
 end
+
 --MARK: register_button
 function ButtonManager:register_new_button(button_name, button_states)
-    -- First initialize the button
     self:initialize_button(button_name, button_states)
-    -- Then manage unique states to fill up all buttons (including the new one)
-    self:manage_unique_states({[button_name] = {states = button_states}})
+    self:parse_new_states({ [button_name] = { states = self.buttons[button_name].states } })
 end
 
-
 --MARK: update_button_data
--- are the states really translated correctly?
 function ButtonManager:update_button_data(button_name, button_states)
-
-    -- Update the button's states
+    --TODO: actually only update changes and not every state.
     local button = self.buttons[button_name]
-    button.states = button_states
-    
-    -- Re-translate properties and reinitialize
-    button.states_translated = {}
-    local processed_states = self.property_manager:expand_selfupdating_placeholders(button_states)
-    button.states = processed_states
-    --button.states_translated = {}
-    
-    -- Reinitialize the button with new states
-    -- if self.default_state_name is empty or nil, aprox a default
-    local state_name = self.default_state_name
-    if not state_name or state_name == "" then
-        state_name = self:aprox_default(button_states)
+    if not button then
+        mp.msg.warn("update_button_data: unknown button", button_name)
+        return
     end
-    button:initialize_states(state_name)
-    
-    -- Update property tracking
-    self.property_manager:track_states_properties(button_name, button.states)
-    
-    -- Manage unique states for the updated button
-    self:manage_unique_states({[button_name] = {states = button_states}})
-    
-    -- Update the button display
+    self:parse_new_states({ [button_name] = { states = button.states } })
+    self:sync_button_states_from_raw(button, button_name, button_states)
+    --TODO: check if this really works
+    for _, data in ipairs(self.property_manager.property_map.buttons[button_name] or {}) do
+        self:handle_substitution(button, data)
+    end
+
     button:update_state(self.current_active_state)
 end
 
@@ -789,10 +738,10 @@ function ButtonManager:set_button_state(state_name)
         mp.msg.debug("ButtonManager:set_button_state; state_name is nil or empty")
         return 
     end
-    if not self.unique_states[state_name] then
+    if not self.deduped_state_names[state_name] then
         if not options.state_map[state_name] then return end
         mp.msg.warn(string.format("State %s does not exist.", state_name))
-        mp.msg.debug(string.format("State %s not in unique states.", state_name))
+        mp.msg.debug(string.format("State %s not in deduped_state_names.", state_name))
         return
     end
     self.current_active_state = state_name
@@ -807,11 +756,57 @@ function ButtonManager:show_default()
     self:set_button_state(self.default_state_name)
 end
 
+--MARK: reg_script_msg
+function ButtonManager:register_script_messages()
+    mp.register_script_message('update-button', function(button_name)
+        self:update_button(button_name)
+    end)
 
+    -- NEW: Add the property change handler here. me v.2.0: ???
+    mp.register_script_message('property-changed', function(prop_name, value)
+        local affected_buttons = self.property_manager.property_map.standard[prop_name] or {}
+        for _, button_name in ipairs(affected_buttons) do
+            local button = self.buttons[button_name]
+            if button then
+                for _, data in ipairs(self.property_manager.property_map.buttons[button_name] or {}) do
+                    self:handle_substitution(button, data, prop_name)
+                end
+                button:update_state(self.current_active_state)
+            end
+        end
+    end)
+
+    -- Switch default state when a property value matches
+    -- iterate through all states of the button and look where the property matches the value
+    mp.register_script_message('swap-default', function(value, button_name)
+        if not value then return end
+        
+        local button = self.buttons[button_name]
+        if not button or not button.states then return end
+        local button_states = button.states
+
+        -- We know a swap-default property changed, but not which state owns it.
+        -- Parse each state's active expression and promote the matching one.
+        for state_name, state in pairs(button_states) do
+            local parsed = parse_complex_field_placeholder(state and state.active)
+            if parsed
+                and parsed.op == COMPLEX_OP.swap_default
+                and parsed.value == value
+            then
+                -- Stop after first successful swap, otherwise we can match again
+                -- against already-mutated table entries in this same iteration. (guess)
+                -- But it's good practive anyway.
+                if self:swap_button_state_to_default(button_name, state_name, parsed.prop) then
+                    break
+                end
+            end
+        end
+    end)
+end
 
 --MARK: reg msg handlers
 function ButtonManager:register_message_handlers()
-    for state_name in pairs(self.unique_states) do
+    for state_name in pairs(self.deduped_state_names) do
         self:register_message_handler(state_name)
     end
 end
@@ -819,7 +814,6 @@ function ButtonManager:register_message_handler(state_name)
     mp.msg.debug("register_message_handlers", 'set ' .. state_name)
     if not state_name then return end
 
-    --TODO: this assumes we only have ucm_currstate as massage handler?
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
             msg.debug("set state to default state")
@@ -859,10 +853,10 @@ function ButtonManager:update_defaults()
     self:show_default() 
 end
 
+--MARK: default_handlers
 
 -- in case we want another state as default. For example, if we want ta have state_3 as default in fullscreen
 -- we can use the set_default script message in other scripts/auto profile
---MARK: default_handlers
 --- Registers handlers for managing default button states and state restoration
 --- @param self ButtonManager The ButtonManager instance
 function ButtonManager:register_default_handlers()
@@ -871,6 +865,9 @@ function ButtonManager:register_default_handlers()
         mp.msg.debug("No default state configured - skipping handler registration")
         return
     end
+
+    mp.unregister_script_message('set-default')
+    mp.unregister_script_message('revert-default')
 
     -- Store initial configuration snapshots
     local initial_config = {
@@ -882,7 +879,7 @@ function ButtonManager:register_default_handlers()
 
     -- Handler to change default state
     mp.register_script_message('set-default', function(new_default_state)
-        if not new_default_state or not self.unique_states[new_default_state] then
+        if not new_default_state or not self.deduped_state_names[new_default_state] then
             mp.msg.debug("Invalid new default state requested:", new_default_state)
             return
         end
@@ -934,8 +931,9 @@ function ButtonManager:register_default_handlers()
 end
 
 -- MARK: handle_subs
-function ButtonManager:handle_substitution(button, caller, data)
+function ButtonManager:handle_substitution(button, data, caller)
     local state_name, prop_name, field_type = data.state_name, data.prop, data.type
+    caller = caller or prop_name
     if caller ~= prop_name then return end
 
     
@@ -954,6 +952,9 @@ function ButtonManager:handle_substitution(button, caller, data)
     if props and has_value(props, prop_name) then
         
         for _, old_prop_name in ipairs(props) do
+            -- TODO: check why true ended up here instead of 'true'
+            -- uosc_controls_modifier: Update button prop_ref_test_btn states {"state_1" = {"active" = "[[pause??]]"}}
+            -- "[[pause??]]" is a malformed placeholder the reason? ?? is compare. compare against nothing should be false
             local value = self.property_manager.property_map.values[old_prop_name] or ""
             local pattern = ("[[" .. old_prop_name .. "]]"):gsub("([%.%-%+%[%]%(%)%$%^%?%*])", "%%%1")
             table.insert(new_values, {pattern = pattern, new_value = value})
@@ -964,7 +965,6 @@ function ButtonManager:handle_substitution(button, caller, data)
     for raw_pattern, placeholder in pairs(placeholders) do
         if orig_field:match(raw_pattern) then
             local value = placeholder.fun(self.property_manager) or ""
-
             table.insert(new_values, {pattern = raw_pattern, new_value = value})
         end
     end
@@ -1022,7 +1022,10 @@ function PropertyManager.new()
         local values = {...}
         local current = mp.get_property_native(prop)
         local current_idx = table_find(values, current) or 0
-        local next_value = values[(current_idx % #values) + 1]
+        if not values[1] then
+            mp.msg.error("cycle-prop-values: no values provided for prop " .. prop)
+        end
+        local next_value = values[(current_idx % #values) + 1] or 0
         mp.set_property(prop, next_value)
     end)
 
@@ -1107,34 +1110,35 @@ end
 function PropertyManager:insert_values_in_field(original, new_values)
     local result = original
     for _, new_value in ipairs(new_values) do
-        result = string.gsub(result, new_value.pattern, new_value.new_value)
+        if not new_value.pattern or not new_value.new_value then
+            mp.msg.error("insert_values_in_field: new_value is nil")
+        end
+
+        local string_newvalue = tostring(new_value.new_value)
+        result = string.gsub(result, new_value.pattern, string_newvalue)
     end
     return result
 end
 
 --MARK: value_cycle
 --- Gated once per (user-data key, cycle list): native default + `cycle-prop-values` script-message merged into `command`.
+--- protecting the command string assembly from adding multiple times.
+--- not sure this is even possible
 function PropertyManager:ensure_value_cycle_initialized(short_prop, cycle_values, command)
     local ud_prop = "user-data/" .. short_prop
-    local gate_key = ud_prop .. "\0" .. (cycle_values or "")
+    local gate_key = ud_prop .. "\0" .. cycle_values
+
 
     local command_parts = {}
-    if command and command ~= "" and command ~= "nil" then
+    if command and not has_value(options.falsy_values, command) then
         table.insert(command_parts, command)
     end
 
     if not self._value_cycle_initialized[gate_key] then
+
         self._value_cycle_initialized[gate_key] = true
+        mp.set_property_native(ud_prop, split(cycle_values, " ")[1])
 
-        local initial_value = split(cycle_values, " ")
-        initial_value = initial_value and initial_value[1]
-        if initial_value then
-            mp.set_property_native(ud_prop, initial_value)
-        end
-
-        if #command_parts > 0 then
-            table.insert(command_parts, ";")
-        end
         table.insert(command_parts, string.format(
             [[script-message-to %s cycle-prop-values %s %s]],
             script_name,
@@ -1143,7 +1147,7 @@ function PropertyManager:ensure_value_cycle_initialized(short_prop, cycle_values
         ))
     end
 
-    return table.concat(command_parts)
+    return table.concat(command_parts, "; ")
 end
 
 --- Current `user-data/<short_prop>` for substitution (after expand, normal updates use the `[[user-data/…]]` path).
@@ -1159,6 +1163,7 @@ end
 --MARK: selfupdating prop
 --- Init-time expansion for self-updating placeholders (value_cycle, add new kinds here).
 function PropertyManager:expand_selfupdating_placeholders(button_states)
+    -- helper function
     local function rewrite_customprop_in_field(field_str, short_prop, cycle_values, operator)
         local ud_prop = "user-data/" .. short_prop
         local needle = "[[" .. short_prop .. operator .. cycle_values .. "]]"
@@ -1170,37 +1175,47 @@ function PropertyManager:expand_selfupdating_placeholders(button_states)
         return rewritten
     end
 
+    -- while its called expand complex props, the only selupdating prop in complex props
+    -- is cycle values.
+    local function expand_complex_props(state, field_key)
+        -- for custom cycle props, like shuffle (COMPLEX_OP.value_cycle)
+
+        local field = state[field_key]
+        if type(field) ~= "string" then return end
+        local props = extract_properties(field)
+        if not props then return end
+
+        for _, prop in ipairs(props) do
+            local parsed = parse_complex_field_placeholder("[[" .. prop .. "]]")
+            local operator = COMPLEX_OP.value_cycle
+            if parsed and parsed.op == operator then
+                state.command = self:ensure_value_cycle_initialized(
+                    parsed.prop,
+                    parsed.value,
+                    state.command
+                )
+                field = rewrite_customprop_in_field(field, parsed.prop, parsed.value, operator)
+                state[field_key] = field
+            end
+        end
+    end
+
+    local function expand_commands(state)
+        if not state.command then return end
+
+        for _, ph in ipairs(placeholders_command) do
+            state.command = state.command:gsub(ph.pattern, ph.command)
+        end
+    end
+
     for _, state in pairs(button_states) do
         if type(state) ~= "table" then break end
 
-        if state.command then
-            for _, ph in ipairs(placeholders_command) do
-                state.command = state.command:gsub(ph.pattern, ph.command)
-            end
-        end
-
-        -- for custom cycle props, like shuffle (COMPLEX_OP.value_cycle)
+        expand_commands(state)
         for _, field_key in ipairs({ "active", "badge", "tooltip" }) do 
-            local field = state[field_key]
-            if type(field) == "string" then
-                local props = extract_properties(field)
-                if props then
-                    for _, prop in ipairs(props) do
-                        local parsed = parse_complex_field_placeholder("[[" .. prop .. "]]")
-                        local operator = COMPLEX_OP.value_cycle
-                        if parsed and parsed.op == operator then
-                            state.command = self:ensure_value_cycle_initialized(
-                                parsed.prop,
-                                parsed.value,
-                                state.command
-                            )
-                            field = rewrite_customprop_in_field(field, parsed.prop, parsed.value, operator)
-                            state[field_key] = field
-                        end
-                    end
-                end
-            end
+            expand_complex_props(state, field_key)
         end
+        
     end
     return button_states
 end
@@ -1415,13 +1430,18 @@ local function setup_input_events()
 
         if state_name == 'default' or key:find("^key_%d+$") then return end
 
+        print("state_name:", state_name, "key:", key)
+
         local on = {
             press      = string.format("script-message-to %s set %s",               script_name, state_name),
             release    = string.format("script-message-to %s revert_inputevent %s", script_name, is_mouse),
             ["repeat"] = string.format("script-message-to %s cancel_revert",        script_name)
         }
 
-        
+        if options.supress_input_warnings_key then
+            if key == 'default' then key = options.supress_input_warnings_key end
+        end
+
         local success = mp.commandv('script-message-to', 'inputevent', 'bind', key, mp.utils.format_json(on))
 
         if not success then
@@ -1450,7 +1470,7 @@ local function setup_input_events()
 end
 
 
-function setup_managers(manager)
+function Setup_managers(manager, state_map)
     manager = ButtonManager.new()
     manager:init(state_map)
     return manager
@@ -1463,7 +1483,7 @@ parse_buttons_table()
 setup_input_events() 
 
 local manager = nil
-manager = setup_managers(manager)
+manager = Setup_managers(manager, _)
 
 
 --MARK: script msg
@@ -1488,8 +1508,8 @@ local function safe_json_parse(json_string, error_context)
         return nil
     end
     if type(result) ~= "table" then
-        mp.msg.error(type(result), "?",error_context or "Invalid data format - expected table")
-        mp.msg.debug("result:", result, "json_string:", result)
+        mp.msg.error(type(result), "is not a table", error_context or "Invalid data format - expected table")
+        mp.msg.debug("safe_json_parse:", result, "json_string:", json_string)
         return nil
     end
     return result
@@ -1512,12 +1532,14 @@ mp.register_script_message('cycle', function()
     
     mp.set_property_number("user-data/ucm_currstate", next_state)
     manager:set_button_state(options.state_cycle_map[next_state])
+    mp.msg.debug("cycle to state:", next_state)
     return true
 end)
 
 mp.register_script_message('cycle-back', function()
     local current_state = mp.get_property_number("user-data/ucm_currstate") or 1
     local num_states = #options.state_cycle_map
+    -- 1-based modulo backward: (i-2) % n + 1
     local next_state = ((current_state - 2) % num_states) + 1
     
     mp.set_property_number("user-data/ucm_currstate", next_state)
@@ -1589,10 +1611,9 @@ mp.register_script_message('set-buttons', function(buttons_json)
         translated[button_name] = button_data.states
     end
     options.buttons = get_table_length(translated) > 0 and translated or parsed_buttons
-    manager = setup_managers(manager)
+    manager = Setup_managers(manager)
     return true
 end)
-
 mp.register_script_message('get-button', function(button_receiver, button_name)
     if manager.buttons[button_name] then
         local button_json = safe_json_stringify(manager.buttons[button_name].states, "get-button failed")
@@ -1603,7 +1624,6 @@ mp.register_script_message('get-button', function(button_receiver, button_name)
     end
     return true
 end)
-local retry_count = 0
 mp.register_script_message('set-button', function(...)
     local args = {...}
     local button_name = args[1]
@@ -1616,22 +1636,22 @@ mp.register_script_message('set-button', function(...)
     end
 
     if manager.buttons[button_name] then
+        mp.msg.debug("Update button", button_name, "states", mp.utils.to_string(button_states))
         manager:update_button_data(button_name, button_states)
     else
+        mp.msg.debug("Register new button", button_name)
         manager:register_new_button(button_name, button_states)
     end
 
     return true
 end)
 
---TODO: hide buttons with passive props until file loaded observer?
---TODO: instead of ?? and making it active, making the active default would be nicer.
-    -- special observer that swaps the states of the button?
+--TODO: update via set-button breaks the observer that make the shuffle button active / inactive
 --TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
 --TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
         -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
         -- me.v.2.0: ??? no clue.
---TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? duuno
---TODO: mini controls button menu after uosc pr got acepted? Menubutton is visible and 3 buttons with content are invisible
+--TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? dunno
+--TODO: mini controls button menu after uosc pr got acepted (well, it got denied[not without reason])? Menubutton is visible and 3 buttons with content are invisible
 --       first click shows first state until nth state and a final click makes the content button invisible again.
 --       would be usefull for one state contrast one state brightness etc.
