@@ -329,6 +329,15 @@ local function safe_json_stringify(data, error_context)
     end
     return result
 end
+-- mp.utils.parse_json drops JSON null keys, so a null value is indistinguishable from an
+-- omitted field (fill-up then inherits it from the default state). Map structural null
+-- values to the UCM_NIL sentinel, which survives parsing and is coerced to nil by
+-- update_state (explicit clear).
+-- ponytail: a string field literally containing ":null," or ":null}" would be corrupted;
+-- upgrade to a parsed-JSON walk if that ever matters.
+local function null_values_to_ucm_nil(json_string)
+    return (json_string:gsub(': ?null([,}])', ':"UCM_NIL"%1'))
+end
 
 mp.register_script_message('cycle', function()
     if not controlsdata.state_cycle_map then return end
@@ -397,7 +406,7 @@ mp.register_script_message('get-buttons', function(button_receiver)
 end)
 mp.register_script_message('set-buttons', function(buttons_json, caller)
     print_msg("set_buttons_called", "debug", caller)
-    local parsed_buttons = safe_json_parse(buttons_json, "set-buttons failed")
+    local parsed_buttons = safe_json_parse(null_values_to_ucm_nil(buttons_json), "set-buttons failed")
     if not parsed_buttons then return end
     print_msg("buttons_received", 'debug')
 
@@ -443,7 +452,7 @@ mp.register_script_message('set-button', function(...)
     local args = {...}
     local button_name = args[1]
     local states_json = table.concat(args, " ", 2)
-    local button_states = safe_json_parse(states_json, "set-button failed")
+    local button_states = safe_json_parse(null_values_to_ucm_nil(states_json), "set-button failed")
 
     if not button_states then 
         print_msg("parse_button_failed", "debug")
@@ -460,14 +469,12 @@ mp.register_script_message('set-button', function(...)
 
     return true
 end)
---TODO: for set buttons, if there is a key in the table, assume nil is intended to be nil and not empty for cloning.
 --TODO: can confirm, without icon on state_2 it got it from state_1, but the pointer and not a copy. set-button logic is flawed.
         -- should be the update_button_data flow.
 --TODO: add some logic that sends a message when ucm is ready to receive buttons or implement set-button(s) in such a way, that it holds them
         -- until ucm is ready for them. timeout? 
 --TODO: there is possible some unintended inheritance on for example badge. set state_1 badge to 4 and state_2.badge was also for
         -- cant even nil it because of the bug below.
---TODO: set-button does not work with nil values. e.g. you want to hide the badge on state_2.
 --TODO: fix button.state.hide not working with boolean anymore.
 --TODO: hide = true in the default state should be copied to filled up states, or they would show up when cycling states.
         --bug: its seemingly overwriting hide values. e.g. state_1 hide = true and state_2 hide = false, if you switch from 2 to 1, 1 is visible after.
