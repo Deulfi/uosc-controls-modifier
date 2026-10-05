@@ -334,7 +334,6 @@ function ButtonManager:register_message_handler(state_name)
                 break
             end
         end
-        mp.msg.debug('set state to:', state_name)
         self:set_button_state(state_name)
     end)
 end
