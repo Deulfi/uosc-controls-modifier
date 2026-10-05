@@ -63,8 +63,24 @@ local controlsdata = {
 }
 
 local script_name = mp.get_script_name()
-mp.options.read_options(config, script_name)
-mp.options.read_options(controlsdata, script_name)
+-- Read the conf once so unknown keys warn once (was two read_options calls, each
+-- warning about the other table's keys — every conf line warned twice).
+local conf = {}
+for key, value in pairs(config) do
+    conf[key] = value
+end
+for key, value in pairs(controlsdata) do
+    conf[key] = value
+end
+mp.options.read_options(conf, script_name)
+for key, value in pairs(conf) do
+    if config[key] ~= nil then
+        config[key] = value
+    end
+    if controlsdata[key] ~= nil then
+        controlsdata[key] = value
+    end
+end
 -- Split the comma list from the conf into a table (utils.has_value iterates tables).
 config.active_truthy_values = utils.split(config.active_truthy_values, ',')
 
