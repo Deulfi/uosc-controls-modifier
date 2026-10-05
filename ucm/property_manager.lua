@@ -1,5 +1,6 @@
 -- ucm/property_manager.lua
 local utils = require 'utils'
+local FIELD_TYPES = { 'active', 'badge', 'tooltip', 'icon', 'hide', 'command' }
 
 local PropertyManager = {}
 PropertyManager.__index = PropertyManager
@@ -39,22 +40,24 @@ function PropertyManager:track_states_properties(button_name, states)
     -- so property changes trigger substitution and a re-push.
     for state_name, state in pairs(states) do
         for index, field in ipairs({state.active, state.badge, state.tooltip, state.icon, state.hide, state.command}) do
-            local field_types = {'active', 'badge', 'tooltip', 'icon', 'hide', 'command'}
-            local field_type = field_types[index]
-            if field == nil then field = 'nil' end
-            if type(field) ~= 'string' then field = tostring(field) end
+            local field_type = FIELD_TYPES[index]
+            if field == nil or type(field) ~= 'string' then
+                field = nil
+            end
 
             for _, prop in ipairs(utils.extract_properties(field) or {}) do
                 insert_data(prop, state_name, field_type)
             end
 
-            for pattern, placeholder in pairs(utils.placeholders) do
-                if field:match(pattern) then
-                    for _, prop in ipairs(placeholder.props_active) do
-                        insert_data(prop, state_name, field_type)
-                    end
-                    for _, prop in ipairs(placeholder.props_passive) do
-                        insert_data(prop, state_name, field_type, 'passive')
+            if field then
+                for pattern, placeholder in pairs(utils.placeholders) do
+                    if field:match(pattern) then
+                        for _, prop in ipairs(placeholder.props_active) do
+                            insert_data(prop, state_name, field_type)
+                        end
+                        for _, prop in ipairs(placeholder.props_passive) do
+                            insert_data(prop, state_name, field_type, 'passive')
+                        end
                     end
                 end
             end
@@ -75,7 +78,7 @@ function PropertyManager:register_property(prop_name)
     local observe_prop = is_video_params_field and 'video-params' or prop_name
     mp.observe_property(observe_prop, 'native', function(_, value)
         if is_video_params_field and type(value) == 'table' then
-            self.property_map.values[prop_name] = value[is_video_params_field]
+            self.property_map.values[prop_name] = tostring(value[is_video_params_field] or '')
             mp.commandv('script-message-to', self.script_name, 'property-changed', prop_name, tostring(value[is_video_params_field] or ''))
         else
             self.property_map.values[prop_name] = value
@@ -117,7 +120,7 @@ function PropertyManager:ensure_value_cycle_initialized(short_prop, cycle_values
 
     if not self._value_cycle_initialized[gate_key] then
         self._value_cycle_initialized[gate_key] = true
-        mp.set_property_native(ud_prop, utils.split(cycle_values, ' ')[1])
+        mp.set_property_native(ud_prop, utils.split_list(cycle_values, ' ')[1])
 
         table.insert(command_parts, string.format(
             [[script-message-to %s cycle-prop-values %s %s]],
@@ -145,9 +148,6 @@ function PropertyManager:expand_selfupdating_placeholders(button_states)
         local needle = '[[' .. short_prop .. operator .. cycle_values .. ']]'
         local escaped = utils.escape_lua_pattern(needle)
         local rewritten = field_str:gsub(escaped, '[[' .. ud_prop .. ']]', 1)
-        if rewritten == field_str then
-            rewritten = field_str:gsub('%[%[.-%]%]', '[[' .. ud_prop .. ']]', 1)
-        end
         return rewritten
     end
 
@@ -211,7 +211,7 @@ function PropertyManager:getMediaFormatLabel()
     local path = self.property_map.values['path']
     local extension = path and path:match('%.([^%.]+)$')
 
-    if not path and not extension then return '' end
+    if not path then return '' end
 
     if extension and self.config.video_types:find(extension) then
         return self.property_map.values['video-format'] or self.property_map.values['video-codec-name'] or self.property_map.values['video-codec'] or self.property_map.values['audio-codec-name'] or ''

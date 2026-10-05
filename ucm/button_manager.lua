@@ -28,6 +28,8 @@ function ButtonManager:unregister_all_handlers()
     mp.unregister_script_message('revert-default')
     mp.unregister_script_message('cancel_revert')
     mp.unregister_script_message('revert_inputevent')
+    mp.unregister_script_message('set')
+    mp.unregister_script_message('cycle-prop-values')
 end
 
 function ButtonManager:init()
@@ -51,6 +53,7 @@ function ButtonManager:init()
 end
 
 function ButtonManager:refresh_all_buttons()
+    -- ponytail: full re-translate; fine at ~12 buttons, revisit if count grows
     local state = self.current_active_state
     if not state or state == '' then state = self.default_state_name end
     for button_name, button in pairs(self.buttons) do
@@ -74,7 +77,6 @@ function ButtonManager:parse_new_states(partial_buttons)
         for state in pairs(states_to_check) do
             if not self.deduped_state_names[state] then
                 utils.print_msg('discovered_shared_state', 'debug', state)
-                self:register_message_handler(state)
             end
             self.deduped_state_names[state] = true
         end
@@ -143,7 +145,8 @@ function ButtonManager:approx_default(fallback_states)
 end
 
 function ButtonManager:sync_button_states_from_raw(button, button_name, raw_states)
-    local processed = self.property_manager:expand_selfupdating_placeholders(raw_states)
+    local processed = utils.deep_copy(raw_states)
+    processed = self.property_manager:expand_selfupdating_placeholders(processed)
     button.states = processed
     button.states_translated = {}
     local state_name = self.default_state_name
@@ -179,8 +182,8 @@ function ButtonManager:update_button_data(button_name, button_states)
         utils.print_msg('update_button_data_unknown', 'debug', button_name)
         return
     end
-    self:parse_new_states({ [button_name] = { states = button.states } })
     self:sync_button_states_from_raw(button, button_name, button_states)
+    self:parse_new_states({ [button_name] = { states = button.states } })
     self:refresh_all_buttons()
     button:update_state(self.current_active_state, self)
 end
@@ -238,6 +241,7 @@ function ButtonManager:set_button_state(state_name)
     end
     if not self.deduped_state_names[state_name] then
         if not self.controlsdata.state_map[state_name] and not utils.has_value(self.controlsdata.state_cycle_map, state_name) then
+            utils.print_msg('set_button_state_unknown', 'warn', state_name)
             return
         end
     end
@@ -310,25 +314,13 @@ function ButtonManager:register_script_messages()
         local next_value = values[(current_idx % #values) + 1]
         mp.set_property(prop, next_value)
     end)
-end
-function ButtonManager:register_message_handlers()
-    for state_name in pairs(self.deduped_state_names) do
-        self:register_message_handler(state_name)
-    end
-end
-
-function ButtonManager:register_message_handler(state_name)
-    utils.print_msg('register_handlers', 'debug', 'set ' .. state_name)
-    if not state_name then return end
-
     mp.register_script_message('set', function(state_name)
         if state_name == 'default' then
-            mp.msg.debug('set state to default state')
             mp.set_property_number('user-data/ucm_currstate', 1)
             self:show_default()
             return
         end
-        for i, state in ipairs(self.controlsdata.state_cycle_map) do
+        for i, state in ipairs(self.controlsdata.state_cycle_map or {}) do
             if state == state_name then
                 mp.set_property_number('user-data/ucm_currstate', i)
                 break
@@ -417,10 +409,8 @@ function ButtonManager:register_default_handlers()
 end
 
 -- MARK: handle_subs
-function ButtonManager:handle_substitution(button, data, caller)
+function ButtonManager:handle_substitution(button, data)
     local state_name, prop_name, field_type = data.state_name, data.prop, data.type
-    caller = caller or prop_name
-    if caller ~= prop_name then return end
 
     button:ensure_translated(state_name, self)
 
@@ -457,11 +447,7 @@ function ButtonManager:handle_substitution(button, data, caller)
     local placeholder = raw_pattern and utils.placeholders_complex[raw_pattern] or nil
     if parsed and placeholder then
         if parsed.op == utils.COMPLEX_OP.value_cycle then
-            state.command = self.property_manager:ensure_value_cycle_initialized(
-                parsed.prop,
-                parsed.value,
-                state.command
-            )
+            self.property_manager:ensure_value_cycle_initialized(parsed.prop, parsed.value, state.command)
         end
         local use_complex = (field_type == 'active' and parsed.op ~= utils.COMPLEX_OP.value_cycle)
             or parsed.op == utils.COMPLEX_OP.value_cycle

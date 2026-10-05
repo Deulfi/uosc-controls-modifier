@@ -103,7 +103,7 @@ For `input.conf` / general use:
 For other scripts (recipient = the script name of the calling script; replies arrive as `receive-*` messages):
 - **`get-buttons` recipient** / **`set-buttons` buttons_json** — get / set all buttons.
 - **`get-button` recipient button_name** / **`set-button` button_name button_json** — get / set one button.
-- **`get-state-map` recipient** — returns the current cycle map (json).
+- **`get-state-map` recipient** — returns the current `state_map` (JSON, as `receive-state-map`).
 - **`set-state-map` new_map** — sets the `state_map` (`state:KEY,...`) and re-registers inputevent bindings.
 - **`get-cycle-states` recipient** / **`set-cycle-states` new_states** — get / set the `state_cycle_map`.
 - **`update-button` button_name** — re-translates one button (should be automatic; manual fallback).

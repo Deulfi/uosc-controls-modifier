@@ -2,13 +2,13 @@ local mp_utils = require('mp.utils')
 -- ucm/button.lua
 local utils = require 'utils'
 
-local function make_default_state(script_name)
+local function make_default_state()
     return {
         icon    = '',
         badge   = nil,
         active  = false,
         tooltip = '',
-        command = string.format('script-message-to %s label', script_name),
+        command = 'noop',
     }
 end
 local Button = {}
@@ -70,12 +70,11 @@ function Button:initialize_states(default_state_name)
     for state_name, state in pairs(self.states) do
         if not validate_button_state(state_name, state, self.name) then
             utils.print_msg('invalid_default_state', 'warn', state_name, self.name)
-            self.states[state_name] = utils.deep_copy(make_default_state(self.script_name))
+            self.states[state_name] = utils.deep_copy(make_default_state())
         end
     end
 
     self.default_state_name = default_state_name
-    self.active_state = self.states_translated[self.default_state_name]
 
     local first_state = self.states[self.default_state_name]
     if not first_state then
@@ -83,12 +82,13 @@ function Button:initialize_states(default_state_name)
         return
     end
 
-    for key, value in pairs(make_default_state(self.script_name)) do
+    for key, value in pairs(make_default_state()) do
         if first_state[key] == nil then first_state[key] = value end
     end
 
+    -- Fill-up mutates RAW states by design: the raw layer is the source of truth.
     for state_name, state in pairs(self.states) do
-        for key, fill_value in pairs(first_state or make_default_state(self.script_name)) do
+        for key, fill_value in pairs(first_state or make_default_state()) do
             if (state[key] == nil or state[key] == '') and
                not (key == 'active' and utils.extract_properties(fill_value)) then
                 state[key] = fill_value

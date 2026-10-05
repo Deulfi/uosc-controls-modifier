@@ -9,7 +9,7 @@ local ButtonManager = require 'button_manager'
 local PropertyManager = require 'property_manager'
 -- Local shortcuts for utils functions used in this file
 local print_msg = utils.print_msg
-local split = utils.split
+local split_list = utils.split_list
 local get_table_length = utils.get_table_length
 local has_value = utils.has_value
 
@@ -82,7 +82,7 @@ for key, value in pairs(conf) do
     end
 end
 -- Split the comma list from the conf into a table (utils.has_value iterates tables).
-config.active_truthy_values = utils.split(config.active_truthy_values, ',')
+config.active_truthy_values = utils.split_list(config.active_truthy_values, ',')
 
 local ucm_bound_keys = {}
 
@@ -90,43 +90,41 @@ local ucm_bound_keys = {}
 -- Build button configuration table from options
 local function parse_buttons_table()
 
-    if controlsdata.buttons then 
+    if controlsdata.buttons then
         print_msg("already_configured", "info")
-        return 
+        return
     end
     controlsdata.buttons = {}
-    
-    local button_index = 1
-    while true do
+
+    local function parse_one_button(button_index)
         local button_config = config[string.format("button%d", button_index)]
-        if not button_config or button_config == "" then break end
-        
+        if not button_config or button_config == "" then return end
+
         local button_name, remaining_config = button_config:match("^%s*([^,]+)%s*,%s*(.+)$")
-        if not button_name then 
+        if not button_name then
             print_msg("invalid_format", "warn", button_index, button_config)
-            break 
-        end
-        
-        button_name = button_name:gsub('"', '')
-        local states = {}
-        
-        if not remaining_config or remaining_config == "" then
-            print_msg("no_states", "warn", button_name)
-            button_index = button_index + 1
             return
         end
-        
-        local state_definitions = split(remaining_config, ",")
+
+        button_name = button_name:gsub('"', '')
+        local states = {}
+
+        if not remaining_config or remaining_config == "" then
+            print_msg("no_states", "warn", button_name)
+            return
+        end
+
+        local state_definitions = split_list(remaining_config, ",")
         for state_index, state_def in ipairs(state_definitions) do
-            local state_parts = split(state_def, "@")
+            local state_parts = split_list(state_def, "@")
             if #state_parts ~= 2 then
                 print_msg("invalid_state", "warn", button_name, state_index)
                 return
             end
             local state_name, properties = state_parts[1], state_parts[2]
-            
-            if not controlsdata.state_map then 
-                controlsdata.state_map = { default = state_name } 
+
+            if not controlsdata.state_map then
+                controlsdata.state_map = { default = state_name }
             end
 
             local property_pairs = utils.split_fields(properties)
@@ -134,35 +132,37 @@ local function parse_buttons_table()
                 print_msg("no_properties", "warn", button_name, state_name)
                 return
             end
-            
+
             local state = {}
-            
+
             for prop_index, prop in ipairs(property_pairs) do
-                local name, content = unpack(split(prop, "="))
+                local name, content = unpack(split_list(prop, "="))
                 if name and content then
                     state[name] = content
                 else
                     print_msg("invalid_property", "warn", button_name, state_name, prop_index)
                 end
             end
-            
+
             if next(state) then
                 states[state_name] = state
             else
                 print_msg("empty_state", "warn", button_name, state_name)
             end
         end
-        
+
         if next(states) then
             controlsdata.buttons[button_name] = states
             print_msg("success_button", "debug", button_name, get_table_length(states))
         else
             print_msg("no_valid_states", "warn", button_name)
         end
-        
-        button_index = button_index + 1
     end
-    
+
+    for button_index = 1, 15 do
+        parse_one_button(button_index)
+    end
+
     if next(controlsdata.buttons) then
         print_msg("success_total", "debug", get_table_length(controlsdata.buttons))
     else
@@ -176,10 +176,10 @@ local function parse_state_mappings(new_state_map, new_cycle_map)
     local state_map = {}
     local cycle_states = {}
     if state_map_to_parse and state_map_to_parse ~= "" then
-        local items = split(state_map_to_parse, ",")
+        local items = split_list(state_map_to_parse, ",")
         
         for index, item in ipairs(items) do
-            local state_name, key = unpack(split(item, ":"))
+            local state_name, key = unpack(split_list(item, ":"))
             
             -- Add to cycle states first
             if not has_value(cycle_states, state_name) then
@@ -205,7 +205,7 @@ local function parse_state_mappings(new_state_map, new_cycle_map)
     print_msg("state_mappings_parsed", "debug")
     print_msg("state_map_debug", "debug", mp_utils.to_string(controlsdata.state_map))
     if cycle_map_to_parse ~= "" and type(cycle_map_to_parse) == "string" then 
-        cycle_map_to_parse = split(cycle_map_to_parse, ",")
+        cycle_map_to_parse = split_list(cycle_map_to_parse, ",")
     end
     controlsdata.state_cycle_map = cycle_states or cycle_map_to_parse or {}
     
@@ -215,7 +215,7 @@ end
 local function parse_resolution_mappings()
     if config.resolution_mapping == "" then return end
 
-    local new_mappings = split(config.resolution_mapping, ",", ":")
+    local new_mappings = utils.split_kv(config.resolution_mapping, ",", ":")
     for resolution, display_name in pairs(new_mappings) do
         local changed = false
         for _, mappings in ipairs(controlsdata.res_map_table) do
@@ -285,14 +285,14 @@ local function setup_input_events()
     mp.register_script_message('revert_inputevent', function(is_mouse)
         print_msg("revert_inputevent")
         -- Create new timer that is either killed as long as keyboard key is pressed or runs out if mousebutton
-        revert_timer = mp.add_timeout(0.3 + config.revert_delay/10, function()
-            --mp.set_property_number("user-data/ucm_currstate", 1)
+        local delay_s = (300 + config.revert_delay) / 1000
+        revert_timer = mp.add_timeout(delay_s, function()
             mp.commandv('script-message-to', script_name, 'set', 'default')
         end)
     end)
 end
-function Setup_manager(manager, script_name)
-    manager = ButtonManager.new(config, controlsdata, script_name)
+local function Setup_manager()
+    local manager = ButtonManager.new(config, controlsdata, script_name)
     manager:init()
     return manager
 end
@@ -305,24 +305,10 @@ parse_buttons_table()
 setup_input_events() 
 
 local manager = nil
-manager = Setup_manager(manager, script_name)
+manager = Setup_manager()
 
 mp.commandv('script-message', 'ucm_ready', "true")
 --MARK: IPC handlers (register_script_message calls)
---mp.register_script_message('update-button', function(button_name)
---mp.register_script_message('set', function(state_name)
---mp.register_script_message('set-default', function(new_default_state)
---mp.register_script_message('revert-default', function()
---mp.register_script_message('cycle', function()
---mp.register_script_message('cycle-back', function()
---mp.register_script_message('get-cycle-states', function(receiver)
---mp.register_script_message('set-cycle-states', function(new_states)
---mp.register_script_message('get-state-map', function(receiver)
---mp.register_script_message('set-state-map', function(new_map)
---mp.register_script_message('get-buttons', function(button_receiver)
---mp.register_script_message('set-buttons', function(buttons_json)
---mp.register_script_message('get-button', function(button_receiver, button_name)
---mp.register_script_message('set-button', function(...)
 local function safe_json_parse(json_string, error_context)
     local success, result = pcall(mp_utils.parse_json, json_string)
     if not success then
@@ -375,6 +361,7 @@ mp.register_script_message('cycle-back', function()
     local next_state = num_states > 0 and ((current_state - 2) % num_states) + 1 or 1
     
     mp.set_property_number("user-data/ucm_currstate", next_state)
+    manager.property_manager.property_map.values["user-data/ucm_currstate"] = next_state
     manager:set_button_state(controlsdata.state_cycle_map[next_state])
     return true
 end)
@@ -391,15 +378,16 @@ mp.register_script_message('set-cycle-states', function(new_states)
         print_msg("new_states_not_string", "error")
         return
     end
-    controlsdata.state_cycle_map = split(new_states, ",")
+    controlsdata.state_cycle_map = split_list(new_states, ",")
     -- Re-parse to pick up new cycle states
     manager:parse_new_states()
     return true
 end)
 
 mp.register_script_message('get-state-map', function(receiver)
-    local state_map_string = table.concat(controlsdata.state_cycle_map, ", ")
-    mp.commandv('script-message-to', receiver, 'receive-state-map', state_map_string)
+    local json_string = safe_json_stringify(controlsdata.state_map, "get-state-map failed")
+    if not json_string then return end
+    mp.commandv('script-message-to', receiver, 'receive-state-map', json_string)
     return true
 end)
 mp.register_script_message('set-state-map', function(new_map)
@@ -409,6 +397,7 @@ mp.register_script_message('set-state-map', function(new_map)
     end
     print_msg("new_state_map_received", 'debug')
     parse_state_mappings(new_map)
+    manager:parse_new_states()
     setup_input_events()
     manager:update_defaults()
     manager:register_default_handlers()
@@ -428,15 +417,23 @@ mp.register_script_message('set-buttons', function(buttons_json, caller)
 
     -- Check for default state using parsed data
     if not manager.default_state_name or manager.default_state_name == "" then
-        -- Get first button and its first state
-        for button_name, button_data in pairs(parsed_buttons) do
-            for state_name, _ in pairs(button_data.states or button_data) do
-                manager.default_state_name = state_name
-                manager.current_active_state = manager.default_state_name
-                controlsdata.state_map = { default = state_name }
-                break
-            end
-            break  -- Only check first button
+        -- Deterministic pick: first button name, then first state name (both sorted)
+        local button_names = {}
+        for button_name in pairs(parsed_buttons) do
+            button_names[#button_names + 1] = button_name
+        end
+        table.sort(button_names)
+        local first_button_data = (parsed_buttons[button_names[1]] or {})
+        first_button_data = first_button_data.states or first_button_data
+        local state_names = {}
+        for state_name in pairs(first_button_data) do
+            state_names[#state_names + 1] = state_name
+        end
+        table.sort(state_names)
+        if state_names[1] then
+            manager.default_state_name = state_names[1]
+            manager.current_active_state = manager.default_state_name
+            controlsdata.state_map = { default = manager.default_state_name }
         end
     end
 
@@ -485,21 +482,3 @@ mp.register_script_message('set-button', function(...)
 
     return true
 end)
---TODO: can confirm, without icon on state_2 it got it from state_1, but the pointer and not a copy. set-button logic is flawed.
-        -- should be the update_button_data flow.
---TODO: add some logic that sends a message when ucm is ready to receive buttons or implement set-button(s) in such a way, that it holds them
-        -- until ucm is ready for them. timeout? 
---TODO: there is possible some unintended inheritance on for example badge. set state_1 badge to 4 and state_2.badge was also for
-        -- cant even nil it because of the bug below.
---TODO: fix button.state.hide not working with boolean anymore.
---TODO: hide = true in the default state should be copied to filled up states, or they would show up when cycling states.
-        --bug: its seemingly overwriting hide values. e.g. state_1 hide = true and state_2 hide = false, if you switch from 2 to 1, 1 is visible after.
---TODO: update via set-button breaks the observer that make the shuffle button active / inactive
---TODO: fill up states not working anymore. me.v.2.0: ??? it is working, look at the debug messages?
---TODO: change user-data/ucm_currstate when using set-default. inputevent reregister? because state_2 is rightclick and now default...
-        -- just use a var that corrects the state name, like state_2? uuhhm you meant state_1... since its only 2 states that can be flipped no bigie
-        -- me.v.2.0: ??? no clue.
---TODO: try to fix inbuild mpv cycle props with custom props. noooope mpv bug? shitty documentation? dunno
---TODO: mini controls button menu after uosc pr got acepted (well, it got denied[not without reason])? Menubutton is visible and 3 buttons with content are invisible
---       first click shows first state until nth state and a final click makes the content button invisible again.
---       would be usefull for one state contrast one state brightness etc.

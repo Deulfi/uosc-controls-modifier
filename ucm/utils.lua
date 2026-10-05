@@ -25,11 +25,6 @@ local COMPLEX_PATTERN_BY_OP = {
     [COMPLEX_OP.value_cycle] = PATTERN.value_cycle,
 }
 
-local PARSER_PATTERN_BY_OP = {
-    [COMPLEX_OP.compare] = PATTERN.compare,
-    [COMPLEX_OP.swap_default] = PATTERN.swap_default,
-    [COMPLEX_OP.value_cycle] = PATTERN.value_cycle,
-}
 
 local placeholders = {
     [PATTERN.media_format] = {
@@ -92,21 +87,15 @@ local messages = {
     update_button_data_unknown = 'update_button_data: unknown button %s',
     swap_default_unknown = 'swap_button_state_to_default: unknown button %s',
     swap_default_no_default = 'swap_button_state_to_default: no default state for button %s',
-    swap_default_same_state = 'swap_button_state_to_default: state already matches default',
     swap_default_missing_states = 'swap_button_state_to_default: missing states for button %s: %s vs %s',
     swap_default_promoted = 'swap_button_state_to_default: %s promoted %s for %s',
     set_button_state_nil = 'ButtonManager:set_button_state; state_name is nil or empty',
-    set_button_state_not_exist = 'State %s does not exist.',
-    set_button_state_not_deduped = 'State %s not in deduped_state_names.',
     set_state_to = 'set state to: %s',
-    register_handlers = 'register_message_handlers: set %s',
     update_defaults = 'ButtonManager:update_defaults; default_state_name: %s',
     no_default_skipping = 'No default state configured - skipping handler registration',
     invalid_new_default = 'Invalid new default state requested: %s',
-    updating_state_map = 'Updating state mapping for: %s to: %s',
     cycle_prop_no_values = 'cycle-prop-values: no values provided for prop %s',
     insert_values_nil = 'insert_values_in_field: new_value is nil, original=%s',
-    unknown_state = "Button '%s': unknown state '%s'",
     state_mappings_parsed = 'State mappings successfully parsed',
     state_map_debug = 'state_map: %s',
     state_cycle_map_debug = 'state_cycle_map: %s',
@@ -117,6 +106,7 @@ local messages = {
     revert_inputevent = 'revert_inputevent',
     json_parse_error = '%s: %s',
     json_stringify_error = 'JSON stringify error: %s',
+    invalid_data_format = 'Invalid data format: got %s, expected table: %s',
     json_parse_debug = 'json_parse_debug: %s (input: %s)',
     new_state_map_received = 'new state_map received',
     set_buttons_called = 'set-buttons called by: %s',
@@ -129,23 +119,8 @@ local messages = {
     update_button = 'Update button %s',
     register_new_button = 'Register new button %s',
     button_added = 'Button added: %s',
-    set_state_default = 'set state to default state',
     discovered_shared_state = 'Discovered shared state name: %s',
-    swap_default_same = 'swap_button_state_to_default: state already matches default',
-    swap_default_no_state = 'swap_button_state_to_default: no target state provided for button %s',
     set_button_state_unknown = "set_button_state: state '%s' not in state_map",
-    update_button_not_found = 'update_button: button not found: %s',
-    property_no_buttons = "property-changed: no buttons watch property '%s'",
-    property_changed_updated = "property-changed: updated %s buttons for prop '%s'",
-    swap_default_no_match = 'swap-default: no state matches value=%s for button %s',
-    expand_commands_debug = 'expand_commands: substituted command: %s',
-    expand_selfupdating_debug = 'expand_selfupdating: active=%s badge=%s tooltip=%s',
-    handle_sub_skip = 'handle_substitution: no state/translated for button=%s state=%s',
-    handle_sub_skip_field = 'handle_substitution: no field=%s for button=%s state=%s',
-    handle_sub_skip_caller = 'handle_substitution: caller=%s does not match prop=%s',
-    button_manager_init = 'ButtonManager: init complete, state_map=%s',
-    sync_button_states_from_raw = 'sync_button_states_from_raw: button=%s',
-    inputevent_debug_state_key = 'inputevent: non-default state/key: %s / %s',
 }
 
 local function parse_complex_field_placeholder(expr)
@@ -180,20 +155,24 @@ local function extract_properties(input_string)
     return #results > 0 and results or nil
 end
 
-local function split(input_string, primary_separator, key_value_separator)
+local function split_list(input_string, entry_separator)
     local result = {}
     if not input_string then return nil end
-    for item in input_string:gmatch(string.format('([^%s]+)', primary_separator)) do
-        if key_value_separator then
-            local key, value = item:match('(.+)' .. key_value_separator .. '(.+)')
-            if key and value then
-                result[key] = value
-            end
-        else
-            result[#result + 1] = item
+    for item in input_string:gmatch(string.format('([^%s]+)', entry_separator)) do
+        result[#result + 1] = item
+    end
+    return result
+end
+
+local function split_kv(input_string, entry_separator, key_value_separator)
+    local result = {}
+    if not input_string then return nil end
+    for item in input_string:gmatch(string.format('([^%s]+)', entry_separator)) do
+        local key, value = item:match('(.+)' .. key_value_separator .. '(.+)')
+        if key and value then
+            result[key] = value
         end
     end
-
     return result
 end
 
@@ -277,7 +256,10 @@ local function print_msg(msg_key, msg_type, ...)
     if not msg_key then msg_key = 'unknown_message_key' end
     if not msg_type then msg_type = 'debug' end
     local msg_string = messages[msg_key] or msg_key
-    local msg = string.format(msg_string, ...)
+    local ok, msg = pcall(string.format, msg_string, ...)
+    if not ok then
+        msg = msg_string .. ' (format failed: ' .. tostring(msg) .. ')'
+    end
 
     if msg_type == 'error' then
         mp.msg.error(msg)
@@ -303,13 +285,13 @@ return {
     PATTERN = PATTERN,
     COMPLEX_OP = COMPLEX_OP,
     COMPLEX_PATTERN_BY_OP = COMPLEX_PATTERN_BY_OP,
-    PARSER_PATTERN_BY_OP = PARSER_PATTERN_BY_OP,
     placeholders = placeholders,
     placeholders_complex = placeholders_complex,
     messages = messages,
     parse_complex_field_placeholder = parse_complex_field_placeholder,
     extract_properties = extract_properties,
-    split = split,
+    split_list = split_list,
+    split_kv = split_kv,
     escape_lua_pattern = escape_lua_pattern,
     table_find = table_find,
     deep_copy = deep_copy,
