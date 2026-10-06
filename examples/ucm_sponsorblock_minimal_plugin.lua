@@ -1,5 +1,5 @@
 -- Simple plugin to create a uosc button to toggle the sponsorblock_chapterized script
--- needs uosc_controls_modifier.lua  https://github.com/Deulfi/uosc-controls-modifier
+-- needs the ucm script (ucm/ folder)  https://github.com/Deulfi/uosc-controls-modifier
 -- Add script directory to package.path
 local script_dir = debug.getinfo(1, "S").source:sub(2):match("(.*/)")
 script_dir = script_dir:gsub("\\", "/") .. "?.lua;"
